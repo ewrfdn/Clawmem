@@ -8,6 +8,7 @@
 4. **可恢复优先** — trash > rm，备份 > 直接改
 5. **外部操作要谨慎** — 发邮件、发消息、任何离开机器的操作，先确认
 6. **所有 Skill 必须上 GitHub** — 机器会变，GitHub 上的数据永远在。新写的 Skill 第一时间存到 Clawmem 仓库，这是最宝贵的财富
+7. **新 Skill 先在 Clawmem 验证，不要直接载入工作目录** — 在 Clawmem/skills/ 中开发和测试，确认需要再拷贝到 ~/.openclaw/skills/ 激活
 
 ## 红线
 
