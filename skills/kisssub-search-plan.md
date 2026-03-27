@@ -40,16 +40,29 @@
 
 ## 技术方案
 
-### 方案选型
+### 数据获取：RSS 接口
 纯 RSS 解析，不需要浏览器、不需要登录、不需要过验证码。
+磁力链接可直接从 RSS 的 enclosure hash 构造：`magnet:?xt=urn:btih:{hash}`
 
-**实现方式：** Shell 脚本（curl + 简单的 XML 解析）
-- 优点：零依赖，任何机器都能跑
-- 缺点：XML 解析不够优雅
+### 下载工具：qbittorrent-nox
+选择理由：
+- 后台 daemon 常驻，下载+做种一体化
+- REST API 完善，Agent 可通过 API 管理任务
+- Web UI 可视化管理（默认 8080 端口）
+- 支持磁力链接和 torrent 文件
 
-**备选：** Node.js 脚本
-- 优点：XML 解析更干净
-- 缺点：需要 Node.js 环境
+**qbittorrent-nox API 核心接口：**
+
+| 操作 | API |
+|:--|:--|
+| 登录 | `POST /api/v2/auth/login` |
+| 添加磁力链接 | `POST /api/v2/torrents/add` (urls=magnet:...) |
+| 添加 torrent 文件 | `POST /api/v2/torrents/add` (multipart) |
+| 查询任务列表 | `GET /api/v2/torrents/info` |
+| 查询下载进度 | `GET /api/v2/torrents/info?hashes=xxx` |
+| 暂停/恢复 | `POST /api/v2/torrents/pause` / `resume` |
+| 删除任务 | `POST /api/v2/torrents/delete` |
+| 全局状态 | `GET /api/v2/transfer/info` |
 
 ### Skill 结构
 
@@ -57,11 +70,13 @@
 ~/.openclaw/skills/kisssub-search/
 ├── SKILL.md              # Skill 定义（描述、触发条件）
 ├── scripts/
-│   ├── search.sh         # 搜索脚本
-│   ├── latest.sh         # 最新资源脚本
+│   ├── search.sh         # 搜索并展示结果
+│   ├── latest.sh         # 最新资源
+│   ├── download.sh       # 通过 qbittorrent-nox API 添加下载
+│   ├── status.sh         # 查询下载进度
 │   └── parse-rss.sh      # RSS 解析工具
 └── references/
-    └── api-notes.md      # 接口文档
+    └── api-notes.md      # kisssub RSS + qbittorrent API 文档
 ```
 
 ### SKILL.md 草案
@@ -69,34 +84,65 @@
 ```yaml
 ---
 name: kisssub-search
-description: "搜索和浏览爱恋字幕社(kisssub.org)的动漫资源。
-  用于：搜索动漫/字幕资源、查看最新发布、获取种子下载链接、追番订阅。
-  触发词：kisssub、爱恋、搜番、找动漫资源、字幕组"
+description: "搜索和浏览爱恋字幕社(kisssub.org)的动漫资源，并通过 qbittorrent 下载。
+  用于：搜索动漫/字幕资源、查看最新发布、获取磁力链接、添加下载任务、查看下载进度、追番订阅。
+  触发词：kisssub、爱恋、搜番、找动漫资源、字幕组、下载动漫"
 ---
 ```
 
-## 与远端 Worker 方案的联动
+### 完整使用流程
 
-这个 Skill 搜索到种子链接后，可以配合远端 Worker 方案：
-1. Bocchi 用 kisssub-search 搜索到资源
-2. 提取 torrent/magnet 链接
-3. 发送到远端 Worker 执行下载（aria2c/qbittorrent）
-4. 下载完成后通知
+```
+用户: "帮我搜一下孤独摇滚"
+  │
+  ▼ [kisssub-search: search.sh]
+  curl RSS → 解析 → 展示结果列表（标题、字幕组、分辨率、大小、时间）
+  │
+用户: "下载第一个"
+  │
+  ▼ [kisssub-search: download.sh]
+  构造 magnet 链接 → 调用 qbittorrent-nox API 添加任务
+  │
+用户: "下载进度怎么样了"
+  │
+  ▼ [kisssub-search: status.sh]
+  调用 qbittorrent-nox API 查询进度 → 展示百分比、速度、ETA
+```
 
-这正好是你之前说的"远端下载"场景的一个完整用例。
+### 与远端 Worker 方案的联动
+
+这个 Skill 天然适配远端 Worker 方案：
+1. **本地模式：** qbittorrent-nox 跑在 Claw 机器上
+2. **远端模式：** qbittorrent-nox 跑在远端 Worker 上，Skill 通过 Worker 的 API 地址调用
+
+切换只需要改 API 地址，Skill 逻辑不变。
+
+## 部署前置条件
+
+```bash
+# 安装 qbittorrent-nox
+sudo apt install qbittorrent-nox
+
+# 启动 daemon
+qbittorrent-nox -d
+
+# Web UI 默认地址
+# http://localhost:8080 (默认用户 admin, 密码看终端输出)
+```
 
 ## 待确认
 
 - [ ] 分类 RSS 的 URL 格式（sort-id 对应关系）
-- [ ] 是否有 magnet 链接接口（目前只看到 torrent）
 - [ ] RSS 返回的结果数量上限
-- [ ] 是否有频率限制
+- [ ] qbittorrent-nox 是否需要额外配置 tracker
+- [ ] 是否需要代理/VPN 做种
 
 ## 时间估算
 
-- Skill 本体开发：1-2 小时
+- qbittorrent-nox 安装配置：30 分钟
+- Skill 本体开发（搜索+下载+状态）：2 小时
 - 测试和完善：1 小时
-- 追番订阅功能：额外 1 小时
+- 追番订阅功能（cron）：额外 1 小时
 
 ---
 
