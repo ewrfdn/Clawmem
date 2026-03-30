@@ -160,44 +160,57 @@ async def do_run(worker_id: str, args: list[str], cwd: str, timeout: float):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Submit commands to HAKO workers and poll results.',
-        usage='hako-run [options] <worker_id> [--cwd dir] <command...>',
-    )
-    parser.add_argument('--list', action='store_true', help='List online workers')
-    parser.add_argument('--query', metavar='TASK_ID', help='Query a task result')
-    parser.add_argument('--cwd', default='', help='Working directory on worker')
-    parser.add_argument('--timeout', type=float, default=3600, help='Timeout in seconds (default: 3600)')
-    parser.add_argument('--poll', type=int, default=5, help='Poll interval in seconds (default: 5)')
-    parser.add_argument('args', nargs='*', help='worker_id followed by command args')
+    # Manual arg parsing to avoid argparse eating command args like /c, &&, etc.
+    argv = sys.argv[1:]
 
-    parsed = parser.parse_args()
-
-    global POLL_INTERVAL
-    POLL_INTERVAL = parsed.poll
-
-    if parsed.list:
+    if '--list' in argv:
         asyncio.run(do_list())
         return
 
-    if parsed.query:
-        worker_id = parsed.args[0] if parsed.args else ''
-        asyncio.run(do_query(parsed.query, worker_id))
+    if '--query' in argv:
+        idx = argv.index('--query')
+        task_id = argv[idx + 1] if idx + 1 < len(argv) else ''
+        worker_id = argv[idx + 2] if idx + 2 < len(argv) else ''
+        asyncio.run(do_query(task_id, worker_id))
         return
 
-    if len(parsed.args) < 2:
-        parser.print_help()
+    # Extract known flags
+    cwd = ''
+    timeout = 3600.0
+    poll_interval = 5
+
+    rest = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == '--cwd' and i + 1 < len(argv):
+            cwd = argv[i + 1]
+            i += 2
+        elif argv[i] == '--timeout' and i + 1 < len(argv):
+            timeout = float(argv[i + 1])
+            i += 2
+        elif argv[i] == '--poll' and i + 1 < len(argv):
+            poll_interval = int(argv[i + 1])
+            i += 2
+        elif argv[i] == '--':
+            rest.extend(argv[i + 1:])
+            break
+        else:
+            rest.append(argv[i])
+            i += 1
+
+    global POLL_INTERVAL
+    POLL_INTERVAL = poll_interval
+
+    if len(rest) < 2:
+        print("Usage: hako-run [--cwd dir] [--timeout secs] [--poll secs] <worker_id> <command...>")
+        print("       hako-run --list")
+        print("       hako-run --query <task_id> [worker_id]")
         sys.exit(1)
 
-    worker_id = os.environ.get('HAKO_DEFAULT_WORKER', '') if parsed.args[0].startswith('-') else parsed.args[0]
-    cmd_args = parsed.args[1:] if not parsed.args[0].startswith('-') else parsed.args
+    worker_id = rest[0]
+    cmd_args = rest[1:]
 
-    if not worker_id:
-        print("Error: worker_id required (or set HAKO_DEFAULT_WORKER)")
-        sys.exit(1)
-
-    cwd = parsed.cwd
-    asyncio.run(do_run(worker_id, cmd_args, cwd, parsed.timeout))
+    asyncio.run(do_run(worker_id, cmd_args, cwd, timeout))
 
 
 if __name__ == '__main__':
