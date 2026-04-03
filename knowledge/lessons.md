@@ -8,6 +8,9 @@
 2. **服务器上的 Chrome 需要 headless + no-sandbox** — 否则启动超时（2026-03-26）
 3. **dpkg 锁冲突时要耐心** — 别强删锁文件，等上一个进程结束（2026-03-26）
 4. **所有技能必须存储在 GitHub** — 在 Clawmem/skills 中开发，按需加载到 workspace，不在 workspace 里直接写技能（2026-03-27）
+5. **路由器透明代理 ≠ PC 客户端配置** — fancyss 等插件用 TPROXY/iptables redirect，不能导入 socks5/http 的客户端 json，要用插件界面填参数（2026-03-31）
+6. **Let's Encrypt 证书指纹会变** — 90 天续期后 pinnedPeerCertSha256 失效，不建议填（2026-03-31）
+7. **排查网络问题先看日志有没有流量** — access.log 为空 = 流量没到服务端，直接定位断点在客户端/中间层（2026-03-31）
 
 ## 工作方式类
 
