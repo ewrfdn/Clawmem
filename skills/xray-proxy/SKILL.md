@@ -1,51 +1,58 @@
 ---
 name: xray-proxy
-description: "配置和管理 Xray 代理服务器。支持 VLESS + WS + TLS（域名方案）和 VLESS + REALITY（纯 IP 方案）。
-  用于：(1) 从零搭建 Xray 代理 (2) 配置 nginx 反代 + TLS (3) 配置 REALITY 伪装 (4) 排查连接问题 (5) 生成客户端配置 (6) 路由器透明代理配置指导。
-  触发词：代理、proxy、Xray、V2Ray、VLESS、翻墙、科学上网、梯子、REALITY"
+description: "Xray 代理配置技能。方案：VMess + WebSocket + TLS，复用现有 nginx + Let's Encrypt 证书。
+  包含：服务端配置、nginx 反代、Clash 订阅、systemd 管理、客户端导入链接生成、排查指南。
+  触发词：代理、proxy、Xray、V2Ray、VMess、Clash、Shadowrocket"
 ---
 
 # Xray Proxy 配置技能
 
-搭建和管理 Xray 代理，覆盖两种主流方案。
+## 架构概览
 
-## 方案对比
-
-| | 域名 + WS + TLS | 纯 IP + REALITY |
-|---|---|---|
-| 需要域名 | ✅ | ❌ |
-| 需要证书 | ✅ Let's Encrypt | ❌ 借用目标站 |
-| 隐蔽性 | 🟡 域名可被关联 | 🟢 伪装大站流量 |
-| 被探测时 | 返回自己的网站 | 返回伪装目标真实内容 |
-| CDN 支持 | ✅ 可套 CF | ❌ |
-| 配置复杂度 | 中 | 略高 |
-
-## 方案 A：VLESS + WebSocket + TLS + nginx
-
-### 前置条件
-- 一台 VPS（有公网 IP）
-- 一个域名（A 记录指向 VPS IP）
-- nginx 已安装
-
-### 步骤
-
-#### 1. 安装 Xray
-
-```bash
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-xray version  # 确认安装
+```
+客户端 (Clash / Shadowrocket / V2rayN / ...)
+  │
+  │  VMess + WebSocket + TLS (443)
+  ▼
+┌──────────────────────────────────────────┐
+│  Nginx (TLS 终止 + 反向代理)              │
+│  <DOMAIN>                                │
+│                                          │
+│  /api/          → 127.0.0.1:8000  (API)  │
+│  /hako.         → 127.0.0.1:50051 (gRPC) │
+│  /<WS_PATH>     → 127.0.0.1:10086 (Xray) │
+│  /sub/<TOKEN>/  → subscribe/ (订阅文件)   │
+│  /              → ui/dist (SPA)          │
+└──────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Xray Server     │
+│  127.0.0.1:10086 │
+│  VMess + WS      │
+└──────────────────┘
 ```
 
-#### 2. 生成 UUID
+Xray 与业务服务共享同一个 nginx + 域名 + TLS 证书，通过不同 URL 路径区分流量。
 
-```bash
-xray uuid
-# 记下输出，后面要用
-```
+## 部署参数
 
-#### 3. 配置 Xray 服务端
+| 项目 | 值 |
+|------|-----|
+| 协议 | VMess（兼容所有客户端，含原版 Clash） |
+| 传输 | WebSocket |
+| TLS | Let's Encrypt (nginx 终止) |
+| Xray 监听 | `127.0.0.1:10086` |
+| WS 路径 | `/<RANDOM_PATH>`（随机生成） |
+| 订阅路径 | `/sub/<TOKEN>/clash.yaml` |
 
-编辑 `/usr/local/etc/xray/config.json`：
+> UUID、WS 路径、订阅 Token 等敏感信息存储在服务端配置中，不入版本控制。
+
+## 服务端配置
+
+### Xray 配置
+
+路径：`/usr/local/etc/xray/config.json`
 
 ```json
 {
@@ -55,13 +62,12 @@ xray uuid
     "error": "/var/log/xray/error.log"
   },
   "inbounds": [{
-    "tag": "vless-ws",
+    "tag": "vmess-ws",
     "listen": "127.0.0.1",
     "port": 10086,
-    "protocol": "vless",
+    "protocol": "vmess",
     "settings": {
-      "clients": [{ "id": "<YOUR_UUID>", "level": 0 }],
-      "decryption": "none"
+      "clients": [{ "id": "<UUID>", "alterId": 0 }]
     },
     "streamSettings": {
       "network": "ws",
@@ -75,11 +81,13 @@ xray uuid
 }
 ```
 
-> `<RANDOM_PATH>` 建议用 `openssl rand -hex 8` 生成随机路径。
+> `alterId: 0` 启用 AEAD 加密（Xray 推荐，兼容所有新版客户端）。
 
-#### 4. 配置 nginx 反代
+### Nginx 反代配置
 
-在 nginx server block 中添加（假设已有 SSL）：
+路径：`/etc/nginx/sites-enabled/hako`
+
+#### WebSocket 反代（Xray 流量）
 
 ```nginx
 location /<RANDOM_PATH> {
@@ -90,147 +98,310 @@ location /<RANDOM_PATH> {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_read_timeout 300s;
-    proxy_send_timeout 300s;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
 }
 ```
 
-#### 5. 申请 TLS 证书
+> 关键：`proxy_http_version 1.1` + `Upgrade/Connection` 头是 WebSocket 反代必需的。
 
-```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d your.domain.com
-# Certbot 自动配置 nginx SSL 并设置自动续期
+#### Clash 订阅端点
+
+```nginx
+location /sub/<TOKEN> {
+    alias /path/to/subscribe/;
+    default_type "text/yaml; charset=utf-8";
+    add_header Content-Disposition "attachment; filename=clash.yaml";
+    add_header Subscription-Userinfo "upload=0; download=0; total=107374182400; expire=0";
+}
 ```
 
-#### 6. 启动
+> Token 使用 `openssl rand -hex 16` 生成，防止被扫描发现。
 
-```bash
-sudo systemctl enable xray
-sudo systemctl start xray
-sudo nginx -t && sudo systemctl reload nginx
+#### 建议的超时配置
+
+在 server 块中添加：
+
+```nginx
+keepalive_timeout 3600s;
 ```
 
-## 方案 B：VLESS + REALITY（纯 IP，无需域名）
+所有 proxy/grpc location 的超时也建议设为 3600s：
 
-### 步骤
-
-#### 1. 安装 Xray（同方案 A）
-
-#### 2. 生成密钥对和 shortId
-
-```bash
-xray uuid           # 生成 UUID
-xray x25519         # 生成 privateKey 和 publicKey
-openssl rand -hex 4 # 生成 shortId
+```nginx
+proxy_connect_timeout 3600s;
+proxy_send_timeout 3600s;
+proxy_read_timeout 3600s;
 ```
 
-#### 3. 选择伪装目标（dest）
+### Systemd 服务
 
-在 VPS 上测试候选目标延迟：
+Xray 使用官方安装脚本的 systemd unit：`/etc/systemd/system/xray.service`
 
-```bash
-curl -so /dev/null -w '%{time_total}\n' https://www.microsoft.com
-curl -so /dev/null -w '%{time_total}\n' https://www.apple.com
-curl -so /dev/null -w '%{time_total}\n' https://www.samsung.com
-# 选延迟最低的
+```ini
+[Unit]
+Description=Xray Service
+After=network.target nss-lookup.target
+
+[Service]
+User=nobody
+ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
+Restart=on-failure
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-**选择原则**：
-- 大厂网站（CDN 节点多，流量特征不被针对）
-- 目标 IP 与 VPS IP 在同一地区（避免 SNI/IP 地理不匹配）
-- 支持 TLS 1.3 + H2
+## 从零搭建步骤
 
-#### 4. 配置 Xray 服务端
+### 1. 安装 Xray
 
+```bash
+curl -L -o /tmp/install-xray.sh https://github.com/XTLS/Xray-install/raw/main/install-release.sh
+sudo bash /tmp/install-xray.sh install
+xray version  # 确认安装
+```
+
+### 2. 生成密钥
+
+```bash
+xray uuid              # 生成 UUID
+openssl rand -hex 8    # 生成随机 WS 路径
+openssl rand -hex 16   # 生成订阅 Token
+```
+
+### 3. 写入 Xray 配置
+
+将上面的 JSON 模板写入 `/usr/local/etc/xray/config.json`，替换 `<UUID>` 和 `<RANDOM_PATH>`。
+
+### 4. 创建 Clash 订阅文件
+
+创建 `subscribe/clash.yaml`，模板如下：
+
+```yaml
+port: 7890
+socks-port: 7891
+allow-lan: false
+mode: rule
+log-level: info
+external-controller: 127.0.0.1:9090
+
+dns:
+  enable: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  fallback:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+
+proxies:
+  - name: Proxy-Node
+    type: vmess
+    server: <DOMAIN>
+    port: 443
+    uuid: <UUID>
+    alterId: 0
+    cipher: auto
+    tls: true
+    udp: true
+    servername: <DOMAIN>
+    network: ws
+    ws-opts:
+      path: /<RANDOM_PATH>
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - Proxy-Node
+      - DIRECT
+
+rules:
+  # 私有地址直连
+  - IP-CIDR,127.0.0.0/8,DIRECT
+  - IP-CIDR,192.168.0.0/16,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT
+  - IP-CIDR,172.16.0.0/12,DIRECT
+  # 国内直连
+  - GEOIP,CN,DIRECT
+  # 兜底代理
+  - MATCH,Proxy
+```
+
+> 可根据需要添加更多域名规则（参考 subscribe/clash.yaml 中的完整规则集）。
+
+### 5. 配置 Nginx
+
+在 nginx server 块中添加 WebSocket 反代 location 和订阅端点 location（见上文模板）。
+
+### 6. 验证并启动
+
+```bash
+sudo nginx -t                        # 测试 nginx 配置
+sudo systemctl enable xray           # 开机自启
+sudo systemctl restart xray          # 启动 Xray
+sudo systemctl reload nginx          # 重载 nginx
+ss -tlnp | grep 10086               # 确认 Xray 监听
+```
+
+## 客户端配置
+
+### Clash（推荐，全平台兼容）
+
+订阅 URL：
+```
+https://<DOMAIN>/sub/<TOKEN>/clash.yaml
+```
+
+导入方式：**Profiles** → **Import from URL** → 粘贴链接 → **Download**
+
+支持客户端：Clash for Windows / ClashX / Clash Verge / Clash Meta（均兼容 VMess）
+
+### Shadowrocket (iOS)
+
+VMess 导入链接格式（需 Base64 编码）：
+
+```
+vmess://<BASE64_ENCODED_JSON>
+```
+
+其中 JSON 内容：
 ```json
 {
-  "log": { "loglevel": "warning" },
-  "inbounds": [{
-    "listen": "0.0.0.0",
-    "port": 443,
-    "protocol": "vless",
-    "settings": {
-      "clients": [{
-        "id": "<YOUR_UUID>",
-        "flow": "xtls-rprx-vision"
-      }],
-      "decryption": "none"
-    },
-    "streamSettings": {
-      "network": "tcp",
-      "security": "reality",
-      "realitySettings": {
-        "dest": "www.microsoft.com:443",
-        "serverNames": ["www.microsoft.com"],
-        "privateKey": "<YOUR_PRIVATE_KEY>",
-        "shortIds": ["<YOUR_SHORT_ID>"]
-      }
-    }
-  }],
-  "outbounds": [
-    { "tag": "direct", "protocol": "freedom" }
-  ]
+  "v": "2", "ps": "Proxy-Node",
+  "add": "<DOMAIN>", "port": "443",
+  "id": "<UUID>", "aid": "0",
+  "net": "ws", "type": "none",
+  "host": "<DOMAIN>", "path": "/<RANDOM_PATH>",
+  "tls": "tls"
 }
 ```
 
-#### 5. 客户端配置要点
+生成命令：
+```bash
+echo -n '{ "v": "2", ... }' | base64 -w 0
+# 然后拼接 vmess:// 前缀
+```
+
+Shadowrocket 中点击 **+** → **从剪贴板导入**。
+
+### V2rayN (Windows) / V2rayNG (Android)
+
+使用与 Shadowrocket 相同的 `vmess://` 链接导入。
+
+### 手动配置参数
+
+| 参数 | 值 |
+|------|-----|
+| 协议 | VMess |
+| 地址 | `<DOMAIN>` |
+| 端口 | `443` |
+| UUID | `<UUID>` |
+| alterId | `0` |
+| 加密 | `auto` |
+| 传输 | WebSocket |
+| WS 路径 | `/<RANDOM_PATH>` |
+| TLS | 开启 |
+| SNI | `<DOMAIN>` |
+
+## 日常运维
+
+### 重启服务
+
+```bash
+sudo systemctl restart xray
+sudo systemctl restart nginx
+sudo systemctl restart hako-server
+```
+
+### 查看状态
+
+```bash
+systemctl status xray --no-pager
+systemctl status nginx --no-pager
+systemctl status hako-server --no-pager
+```
+
+### 查看日志
+
+```bash
+sudo tail -f /var/log/xray/error.log     # Xray 错误日志
+sudo tail -f /var/log/xray/access.log    # Xray 访问日志
+sudo tail -f /var/log/nginx/error.log    # Nginx 错误日志
+sudo journalctl -u hako-server -f        # HAKO 日志
+```
+
+### 更新 Xray
+
+```bash
+curl -L -o /tmp/install-xray.sh https://github.com/XTLS/Xray-install/raw/main/install-release.sh
+sudo bash /tmp/install-xray.sh install
+sudo systemctl restart xray
+```
+
+### 添加新用户
+
+编辑 `/usr/local/etc/xray/config.json`，在 `clients` 数组中添加新 UUID：
 
 ```json
-{
-  "serverName": "www.microsoft.com",
-  "publicKey": "<对应服务端 privateKey 的公钥>",
-  "shortId": "<与服务端匹配>",
-  "fingerprint": "chrome"
-}
+"clients": [
+  { "id": "<EXISTING_UUID>", "alterId": 0 },
+  { "id": "<NEW_UUID>", "alterId": 0 }
+]
 ```
 
-> `fingerprint` 务必设置为 `chrome`/`safari`/`firefox`，不要留空或用 `random`。
+然后 `sudo systemctl restart xray`。
 
 ## 排查指南
 
 ### 连不上
 
 ```bash
-# 1. 检查 Xray 运行状态
+# 1. 检查 Xray 状态
 sudo systemctl status xray
 
-# 2. 查看日志
-sudo journalctl -u xray -f
-# 或
-sudo tail -f /var/log/xray/error.log
+# 2. 检查端口
+ss -tlnp | grep 10086
 
-# 3. 检查端口监听
-ss -tlnp | grep -E '10086|443'
-
-# 4. 测试 nginx 反代（方案 A）
+# 3. 测试 WebSocket 反代
 curl -I -H "Connection: Upgrade" -H "Upgrade: websocket" \
-  https://your.domain.com/<PATH>
+  https://<DOMAIN>/<RANDOM_PATH>
+# 应返回 101 Switching Protocols（或 400，但不应是 404/502）
+
+# 4. 检查 Xray 日志
+sudo tail -20 /var/log/xray/error.log
 ```
 
-### 晚高峰卡顿
+### 连接断开 / 超时
+
+nginx 所有超时已设为 3600s。如果仍断连，可能是：
+
+1. **云平台 TCP 空闲超时**（如 Azure 默认 4 分钟）→ 客户端开启 keepalive
+2. **nginx 不转发 HTTP/2 ping 帧**（旧版问题）→ 已通过 `keepalive_timeout 3600s` 缓解
+
+### 速度慢 / 晚高峰卡
 
 ```bash
-# 检查线路类型
-traceroute -I <VPS_IP>
-# 202.97.x.x = 普通 163 骨干（晚上大概率卡）
+traceroute -I <SERVER_IP>
+# 202.97.x.x = 普通 163 骨干（晚高峰可能卡）
 # 59.43.x.x = CN2（稳定）
 
-# 测试丢包
-mtr -r -c 100 <VPS_IP>
+mtr -r -c 100 <SERVER_IP>
 ```
 
-**晚高峰卡顿通常是线路问题，不是协议问题。** 解法：换 CN2 GIA 线路 VPS 或加中转。
+> 晚高峰卡顿通常是线路问题，不是协议问题。
 
-### 路由器透明代理（fancyss 等）
+## 安全注意事项
 
-⚠️ **不能直接导入 PC 客户端的 json 配置！**
-
-路由器透明代理插件用 TPROXY/iptables redirect，与 PC 客户端的 socks5/http inbound 模式不同。必须通过插件界面填写参数，让插件自动生成正确配置。
-
-## 注意事项
-
-- Let's Encrypt 证书 90 天自动续期，**指纹会变**，不要配置 `pinnedPeerCertSha256`
-- REALITY 的 `dest` 不影响数据传输路径（流量走的是 客户端→VPS，不经过伪装目标）
-- Xray 调试后记得把 loglevel 改回 `warning`（`info` 会写大量日志）
-- UUID、密钥等敏感信息不要写入版本控制或聊天记录
+- UUID、WS 路径、订阅 Token 等敏感信息**不要提交到 Git**
+- WS 路径和订阅路径使用随机字符串，避免被扫描发现
+- 定期检查 `/var/log/xray/access.log` 是否有异常连接
+- Let's Encrypt 证书由 Certbot 自动续期，无需手动管理
+- 调试完毕后将 `loglevel` 改回 `warning`（`info` 会写大量日志）
