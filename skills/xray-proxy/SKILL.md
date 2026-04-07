@@ -251,6 +251,48 @@ sudo systemctl reload nginx          # 重载 nginx
 ss -tlnp | grep 10086               # 确认 Xray 监听
 ```
 
+### 7. 生成客户端订阅链接
+
+搭建完成后，需要生成客户端可导入的链接。
+
+#### 生成 Clash 订阅 URL
+
+Clash 通过 URL 导入 YAML 配置文件，订阅文件已在步骤 4 创建并通过 nginx 提供：
+
+```
+https://<DOMAIN>/sub/<TOKEN>/clash.yaml
+```
+
+#### 生成 VMess 导入链接（Shadowrocket / V2rayN / V2rayNG）
+
+VMess 分享链接 = `vmess://` + Base64 编码的 JSON，**JSON 必须是紧凑格式（无空格）**：
+
+```bash
+# 替换变量后执行
+DOMAIN="your.domain.com"
+UUID="your-uuid-here"
+WS_PATH="/your-random-path"
+NODE_NAME="My-Proxy"
+
+# 生成链接
+echo -n "vmess://$(echo -n "{\"v\":\"2\",\"ps\":\"${NODE_NAME}\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"${WS_PATH}\",\"tls\":\"tls\"}" | base64 -w 0)"
+```
+
+输出示例：
+```
+vmess://eyJ2IjoiMiIsInBzIjoiTXktUHJveHkiLCJhZGQiOiJ5b3VyLmRv...
+```
+
+> ⚠️ **注意**：JSON 必须紧凑（`"v":"2"` 而非 `"v": "2"`），否则 Shadowrocket 无法识别。
+
+#### 快速验证链接是否正确
+
+```bash
+# 将 vmess:// 后面的部分解码验证
+echo "eyJ2IjoiMi..." | base64 -d
+# 应输出完整的 JSON，检查各字段是否正确
+```
+
 ## 客户端配置
 
 ### Clash（推荐，全平台兼容）
@@ -264,37 +306,31 @@ https://<DOMAIN>/sub/<TOKEN>/clash.yaml
 
 支持客户端：Clash for Windows / ClashX / Clash Verge / Clash Meta（均兼容 VMess）
 
-### Shadowrocket (iOS)
+### Shadowrocket (iOS) / V2rayN (Windows) / V2rayNG (Android)
 
-VMess 导入链接格式（需 Base64 编码）：
+使用上面生成的 `vmess://` 链接，导入方式：
 
-```
-vmess://<BASE64_ENCODED_JSON>
-```
+- **Shadowrocket**：复制链接 → 打开 App → 自动识别，或点击 **+** → **从剪贴板导入**
+- **V2rayN**：从剪贴板导入 / 扫描二维码
+- **V2rayNG**：从剪贴板导入 / 扫描二维码
 
-其中 JSON 内容：
+VMess 链接的 JSON 字段说明：
+
 ```json
 {
-  "v": "2", "ps": "Proxy-Node",
-  "add": "<DOMAIN>", "port": "443",
-  "id": "<UUID>", "aid": "0",
-  "net": "ws", "type": "none",
-  "host": "<DOMAIN>", "path": "/<RANDOM_PATH>",
-  "tls": "tls"
+  "v": "2",                    // 协议版本，固定为 2
+  "ps": "节点名称",            // 显示名称
+  "add": "<DOMAIN>",          // 服务器地址
+  "port": "443",              // 端口
+  "id": "<UUID>",             // UUID
+  "aid": "0",                 // alterId，0 = AEAD 加密
+  "net": "ws",                // 传输协议
+  "type": "none",             // 伪装类型
+  "host": "<DOMAIN>",         // WS Host 头
+  "path": "/<RANDOM_PATH>",   // WS 路径
+  "tls": "tls"                // TLS 开启
 }
 ```
-
-生成命令：
-```bash
-echo -n '{ "v": "2", ... }' | base64 -w 0
-# 然后拼接 vmess:// 前缀
-```
-
-Shadowrocket 中点击 **+** → **从剪贴板导入**。
-
-### V2rayN (Windows) / V2rayNG (Android)
-
-使用与 Shadowrocket 相同的 `vmess://` 链接导入。
 
 ### 手动配置参数
 
