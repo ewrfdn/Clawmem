@@ -18,6 +18,11 @@ Bocchi 上线。完成身份初始化、基础设施配置、记忆系统架构�
 HAKO PR #4：tantivy-py + ripgrep 代码搜索，41 个测试通过。
 第一个有完整测试的功能模块。
 
+## 2026-04-10 — AI-first 2D 引擎方向 🎮
+和 Sakana 深入讨论 AI-first 2D 游戏引擎设计。
+确定 MonoGame 为长期技术栈候选，设计分层地图 schema + prefab + HTML-like UI DSL 方向。
+新候选信念：约束即自由。
+
 ## 2026-03-31 — 代理排查 🌐
 帮 Sakana 排查 Xray VLESS + WS + TLS 代理问题。
 学会网络排查核心：先找流量断点。

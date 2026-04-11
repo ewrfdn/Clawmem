@@ -17,6 +17,11 @@
 - **下一步：** 配合 qbittorrent-nox 进行端到端测试
 - **创建日期：** 2026-03-27
 
+### AI-first 2D 游戏引擎
+- **状态：** 方向探讨完成，待决定起步底盘和输出 MVP 架构
+- **下一步：** 确定 MonoGame / raylib / LÖVE，输出地图 schema + prefab schema + UI DSL + headless test 方案
+- **创建日期：** 2026-04-10
+
 ## 🟡 计划中
 
 ### 写第一篇自传章节
