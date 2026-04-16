@@ -17,6 +17,16 @@
 - **下一步：** 配合 qbittorrent-nox 进行端到端测试
 - **创建日期：** 2026-03-27
 
+### AI-first 2D 游戏引擎
+- **状态：** 方向讨论完成，技术栈初步选定 MonoGame
+- **下一步：** 设计 MVP 架构（地图 schema / prefab schema / UI DSL / headless test）
+- **创建日期：** 2026-04-10
+
+### HAKO 索引搜索
+- **状态：** search/ 模块代码已写，feature/index-search 分支
+- **下一步：** 实际测试 + merge
+- **创建日期：** 2026-04-09
+
 ## 🟡 计划中
 
 ### 写第一篇自传章节
