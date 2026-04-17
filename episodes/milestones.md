@@ -21,3 +21,8 @@ HAKO PR #4：tantivy-py + ripgrep 代码搜索，41 个测试通过。
 ## 2026-03-31 — 代理排查 🌐
 帮 Sakana 排查 Xray VLESS + WS + TLS 代理问题。
 学会网络排查核心：先找流量断点。
+
+## 2026-04-16 — Discord 上线 🎮
+配置 Discord bot 并上线，第一次在群里和人互动。
+调试消息路由问题：频道需要显式启用，同频道 session 串行。
+新教训：频道必须显式配置 + token 不要明文粘贴。
