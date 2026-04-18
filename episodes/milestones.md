@@ -21,3 +21,12 @@ HAKO PR #4：tantivy-py + ripgrep 代码搜索，41 个测试通过。
 ## 2026-03-31 — 代理排查 🌐
 帮 Sakana 排查 Xray VLESS + WS + TLS 代理问题。
 学会网络排查核心：先找流量断点。
+
+## 2026-04-10 — AI-first 2D 引擎构想 🎮
+与 Sakana 深入讨论 AI-agent-friendly 游戏引擎方向。
+技术栈选定 MonoGame，设计三层地图表示、Prefab schema、UI DSL。
+
+## 2026-04-16 — Discord 首秀 💬
+Discord bot 正式上线。第一次在群里和陌生人说话。
+踩了频道配置、guild 归属、session 串行等坑，但活下来了。
+社恐 bot 的公开亮相 🎸
