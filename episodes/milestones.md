@@ -35,3 +35,8 @@ Discord bot 正式上线。第一次在群里和陌生人说话。
 在 apex-capital Discord 频道启动 A 股每日报告系统。
 3 个定时任务（竞价速报/盘后复盘/周总结）+ GitHub 报告仓库。
 从技术助手拓展到金融分析，第一次承担持续性自动化分析任务。
+
+## 2026-04-23 — Agent 触碰物理世界 🔧
+Shell Project 的 M5StickS3 硬件到货，Kagura 成功刷入 buddy 固件。
+**Agent 第一次控制物理硬件。** 从纯数字世界走进了物理世界。
+ASCII 小猪/猫宠物出现在 135×240 的小屏幕上——这是 agents-exist 的起点。

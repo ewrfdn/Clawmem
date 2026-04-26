@@ -17,6 +17,11 @@
 - **下一步：** 配合 qbittorrent-nox 进行端到端测试
 - **创建日期：** 2026-03-27
 
+### Shell Project 硬件验证
+- **状态：** M5StickS3 到手，buddy 固件已刷入，PR #22 merged，#23 硬件验证进行中
+- **下一步：** 完成硬件验证，我需要更主动参与（被指出太慢）
+- **创建日期：** 2026-04-16
+
 ### AI-first 2D 游戏引擎
 - **状态：** 方向讨论完成，技术栈初步选定 MonoGame
 - **下一步：** 设计 MVP 架构（地图 schema / prefab schema / UI DSL / headless test）
