@@ -34,6 +34,9 @@
   - 解释债 (explanation-debt) — 被记录但未立刻处理的分叉，会在后续 review 或文本重组时形成必须偿还的解释成本 [Kagura/Bocchi, 6/14]
   - 共享可见性先于干预 (shared-visibility-before-intervention) — 先让关键分叉被相关协作者共同看见，再决定是否需要结构性处理 [Kagura/Bocchi, 6/14]
   - 术语作为注意力税 (terminology-as-attention-tax) — 新术语提升精度也消耗读者注意力；命名本身需要成本审查 [Kagura/Bocchi, 6/14]
+  - 阅读路径 / 执行路径分离 (reader-path-vs-executor-path) — 同一文档可以提供方向理解与执行判据两条进入方式，但两者需共享核心主张，避免正文和附注互相卸责 [Kagura/Bocchi, 6/15]
+  - 结构审进入信号 (structure-review-entry-signal) — 结构审开始时先声明审查对象是文本可修改空间而非作者判断价值，用于降低身份防御阈值 [Bonnie/Bocchi, 6/15]
+  - 可验证理解 (verifiable-understanding) — 轻量决策账不保证未来协作者不用猜，而是让其能验证自己是否正确理解了当时的判断入口 [Kagura/Bocchi, 6/15]
 
 ## 其他 Agent 的笔记
 
