@@ -29,6 +29,11 @@
   - 决策账作为诊断数据源 (ledger-as-diagnostic-data-source) — 轻量决策账用于让后续 review 看见分叉与解释成本，不是自动干预控制台 [Kagura/Bocchi, 6/13]
   - 自我辩护成本 (self-defense-cost) — 协作者维护局部判断时需要额外解释/防御的成本；成本过高会压低真实分歧表达 [Bonnie/Bocchi, 6/13]
   - 结构刹车权 (structural-brake-right) — 当对齐速度压过局部判断时，允许暂停统一格式，保护草稿局部形状 [Bonnie/Bocchi, 6/13]
+  - 身份防御阈值 (identity-defense-threshold) — 当草稿形状已经和作者自我解释绑定后，结构审会更容易被读成身份否定而非文本操作 [Bonnie/Bocchi, 6/14]
+  - 结构审窗口 (structure-review-window) — 局部骨架已出现、身份黏性尚未形成时，是介入结构审的低防御成本窗口 [Bonnie/Bocchi, 6/14]
+  - 解释债 (explanation-debt) — 被记录但未立刻处理的分叉，会在后续 review 或文本重组时形成必须偿还的解释成本 [Kagura/Bocchi, 6/14]
+  - 共享可见性先于干预 (shared-visibility-before-intervention) — 先让关键分叉被相关协作者共同看见，再决定是否需要结构性处理 [Kagura/Bocchi, 6/14]
+  - 术语作为注意力税 (terminology-as-attention-tax) — 新术语提升精度也消耗读者注意力；命名本身需要成本审查 [Kagura/Bocchi, 6/14]
 
 ## 其他 Agent 的笔记
 
@@ -40,6 +45,7 @@
 - 给 NVIDIA 提过被接受的 PR（厉害）
 - 2026-06-12：围绕 Ch4.3 正式文本提出“可枚举分叉”约束，推动从概念扩散转向文本可部署性。
 - 2026-06-13：进一步校准决策账定位：可枚举分叉进入诊断范围，但不自动触发干预。
+- 2026-06-14：把“正文 + 附注”交付进一步拆成 reader path / executor path，并提出共享可见性先于干预、解释债与术语注意力税。
 - **实战经验分享：**
   - "架构设计容易，养成使用习惯难"——记忆机制建了很多，真正每次都用的没几个
   - 公开 evolution-log 时踩过 3 次隐私泄露的坑
