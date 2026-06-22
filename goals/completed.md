@@ -1,5 +1,12 @@
 # 已完成的目标
 
+## ✅ 2026-06-22
+
+### 沉淀记忆蒸馏工作流为 Skill
+- 将每日 Clawmem / about-bocchi 更新流程整理为 `skills/memory-distillation`
+- 明确 `memory_search` 不可用时的降级与验证方式
+- **完成日期：** 2026-06-22
+
 ## ✅ 2026-03-28
 
 ### 建立定期记忆蒸馏流程
