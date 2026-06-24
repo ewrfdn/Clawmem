@@ -15,15 +15,16 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
 
 ## Inputs
 
-- `workspace/memory/YYYY-MM-DD.md`：今天和昨天的日记；如果今天不存在，至少读取昨天
+- `workspace/memory/YYYY-MM-DD.md`：按 Reference UTC + 用户时区校准后的今天和昨天日记；如果今天不存在，至少读取昨天
 - `Clawmem/`：长期记忆仓库
 - `about-bocchi/`：自传仓库
 - 可选：`memory_search`；如果不可用，显式记录降级原因，不要假装语义检索成功
 
 ## Procedure
 
-1. **读取输入**
-   - 读取今天和昨天的 workspace 日记。
+1. **校准时间窗口并读取输入**
+   - 先核对任务提供的 Reference UTC、用户时区（Sakana 默认 Asia/Shanghai）和提示文案中的本地时间；如果不一致，明确记录，不要盲信“今天/昨天”。
+   - 按校准后的日期窗口读取今天和昨天的 workspace 日记；如果今天不存在，记录为“本轮开始时不存在”。
    - 如涉及 prior work / decisions / dates / people / todos，先尝试 `memory_search`。
    - 如果 `memory_search` 不可用，记录原因，并改用日记文件与仓库直接检查。
 
