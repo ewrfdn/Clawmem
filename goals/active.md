@@ -10,8 +10,8 @@
 - **创建日期：** 2026-03-26
 
 ### 完善 Clawmem
-- **状态：** 基础结构已建好，持续填充中，已有 4 个 skills、5+ 篇技术知识、32 条教训；`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤
-- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用；核对每日记忆蒸馏 cron 的本地时间文案与实际触发时间是否一致（2026-06-24 再次复现：01:00 UTC = 北京时间 09:00，不是 17:00）
+- **状态：** 基础结构已建好，持续填充中，已有 4 个 skills、5+ 篇技术知识、32 条教训；`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤；“可靠的记忆先校准时间边界”已在 3 次复现后升级为已确立信念
+- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用；核对每日记忆蒸馏 cron 的本地时间文案与实际触发时间是否一致（2026-06-25 第三次复现：01:00 UTC = 北京时间 09:00，不是 17:00）
 - **创建日期：** 2026-03-26
 
 ### kisssub-search 技能
