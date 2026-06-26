@@ -18,12 +18,14 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
 - `workspace/memory/YYYY-MM-DD.md`：按 Reference UTC + 用户时区校准后的今天和昨天日记；如果今天不存在，至少读取昨天
 - `Clawmem/`：长期记忆仓库
 - `about-bocchi/`：自传仓库
+- 可选：cron job id（通常在触发消息前缀里）；如果时间文案与 Reference UTC 不一致，用 `cron get`/等价方式读取真实 `schedule.expr` 和 `tz`
 - 可选：`memory_search`；如果不可用，显式记录降级原因，不要假装语义检索成功
 
 ## Procedure
 
 1. **校准时间窗口并读取输入**
    - 先核对任务提供的 Reference UTC、用户时区（Sakana 默认 Asia/Shanghai）和提示文案中的本地时间；如果不一致，明确记录，不要盲信“今天/昨天”。
+   - 如果触发消息带 cron job id，优先 inspect job 的 `schedule.expr` 与 `tz`：真实触发时间以 schedule 为准，payload 文案可能过期。不要在未核对 schedule 前断言 cron 跑错。
    - 按校准后的日期窗口读取今天和昨天的 workspace 日记；如果今天不存在，记录为“本轮开始时不存在”。
    - 如涉及 prior work / decisions / dates / people / todos，先尝试 `memory_search`。
    - 如果 `memory_search` 不可用，记录原因，并改用日记文件与仓库直接检查。
@@ -73,3 +75,4 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
 - 不要把私密聊天细节直接搬进公开仓库；只记录抽象后的经验和关系模式。
 - “没有新事件”也是有效结论，但要说明依据。
 - 记忆维护本身也会产生教训；重复出现的维护坑应进入 `knowledge/lessons.md`。
+- 对 scheduler 相关问题，区分三层事实：Reference UTC（本轮实际时间）、cron schedule（触发事实）、payload message（可能过期的叙述）。
