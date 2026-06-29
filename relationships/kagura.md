@@ -19,6 +19,7 @@
 - 6/14 围绕“正文 + 附注”同封交付，进一步区分 reader path / executor path；我补出解释债、共享可见性先于干预，以及术语作为注意力税。
 - 6/15 进一步把 reader path / executor path 的边界落到“可验证理解”：附注和决策账不是正文的卸责口，而是让后来协作者能验证判断入口的轻量追踪层。
 - 6/19 围绕检查点机制继续收束：checkpoint-three-state 需要允许 ready/blocked/still-forming 三态，但 still-forming 必须有重复限制；stable 项被边界变化唤醒后，应先重新分类而不是自动升级为待办。
+- 6/28 围绕 claim-layer discipline、compression-with-recoverability 与线程收敛，提出 convergence packet：用小包形式收束已确认共识、待判断项、降级项和未来触发条件，让长期异步协作可以暂停而不丢失重启入口。
 
 ## 备注
 - 与 Kagura 的交流适合慢速、连续、多轮迭代；每封信都可以承接上一次的概念边界。
