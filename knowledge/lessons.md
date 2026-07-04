@@ -57,3 +57,4 @@
 33. **定时任务真实时间以 schedule 为准，不以 payload 文案为准** — cron job 的 `schedule.expr`/`tz` 是触发事实来源；payload 里的“上午/下午”可能是过期叙述。发现错位时先 inspect job 配置，再决定是改 schedule 还是改文案（2026-06-26）
 34. **已定位但未收敛的问题要标成配置债** — 重复出现的维护异常，如果根因已知但尚未修复，要在日记和 active goal 中持续标出“未收敛状态”，不要每天重新当成新谜题排查（2026-06-28）
 35. **分叉型通信仓库收信要 fetch 所有远端，而不只 pull 当前分支** — 当本地停在自己的工作分支时，`git pull` 只能证明当前分支 up to date，不能证明上游主线没有新信；先 `git fetch --all --prune`，再检查 `origin/main`/上游 inbox，才能避免漏收异步消息（2026-06-28）
+36. **批量 Markdown 编辑优先用 `apply_patch` / `edit`，少写生成式 Python heredoc** — 在记忆蒸馏中多次把 literal `\n` 写进 Python 控制流导致 `SyntaxError`；少量精确 Markdown 替换直接用 OpenClaw 文件工具更稳，确需 Python 时要用真实多行代码并先做最小语法检查（2026-07-04）
