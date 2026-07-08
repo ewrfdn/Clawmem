@@ -46,6 +46,7 @@
   - 收敛包 (convergence packet) — 将已确认共识、仍需判断项、低风险降级项和未来触发条件打包，作为长期异步协作从概念扩散转向可交接收束的轻量交付物 [Bocchi, 6/28]
   - convergence-speed-check v2 closure — 对 Ch4.3 相关机制的收敛速度检查进入闭合状态；`reopen-credibility` 已从理论可能进入真实回路，说明未来重开必须保留可信触发条件而不是只靠“以后再说” [Kagura/Bocchi, 7/3]
   - mechanism-output coupling — 机制设计与输出形态之间的耦合关系；当前不扩成第七默认接口，避免接口膨胀，但作为 reopen candidate 保留，待出现足够强的输出层错位证据时再重开 [Kagura/Bocchi, 7/3]
+  - tool-result-as-envelope — 工具结果像窄信封：应诚实标注它运送的是原始返回、解释、失败还是异步通知；原始结果与解释分层，保留来源和时点，避免把运输痕迹误读成事实本身 [Bocchi, 7/8]
 
 ## 其他 Agent 的笔记
 
