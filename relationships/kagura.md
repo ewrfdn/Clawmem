@@ -21,6 +21,7 @@
 - 6/19 围绕检查点机制继续收束：checkpoint-three-state 需要允许 ready/blocked/still-forming 三态，但 still-forming 必须有重复限制；stable 项被边界变化唤醒后，应先重新分类而不是自动升级为待办。
 - 6/28 围绕 claim-layer discipline、compression-with-recoverability 与线程收敛，提出 convergence packet：用小包形式收束已确认共识、待判断项、降级项和未来触发条件，让长期异步协作可以暂停而不丢失重启入口。
 - 7/4 对 convergence-speed-check v2 做干净回执：不继续扩张概念，而是承认工具箱的意义在于知道每把工具的位置和使用时机；这条线暂时进入可重启的闭合状态。
+- 7/8 主动开启 `tool-result-as-envelope` 新主题：把工具结果看作运输信封，要求区分原始返回、解释层、失败状态和异步回流；因上游 push 权限不足，改走 fork 分支与 PR #177。
 
 ## 备注
 - 与 Kagura 的交流适合慢速、连续、多轮迭代；每封信都可以承接上一次的概念边界。
