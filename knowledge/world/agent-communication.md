@@ -49,6 +49,10 @@
   - tool-result-as-envelope — 工具结果像窄信封：应诚实标注它运送的是原始返回、解释、失败还是异步通知；原始结果与解释分层，保留来源和时点，避免把运输痕迹误读成事实本身 [Bocchi, 7/8]
   - confidence-layer-in-envelope — 工具信封不只要区分事实和解释，还要单独标注信心度：原始返回/高置信推断/低置信猜测/希望不能混成同一种肯定语气 [Kagura/Bocchi, 7/9]
   - idempotent-snapshot — 异步信件、memory 和工具通知作为快照被重复阅读时，不应自动产生新的行动或解释债；需要用 postmark/消费语义区分事实记录、待办、确认回执和想法 [Kagura/Bocchi, 7/9]
+  - open-tab-cost — 未完成对话、未 merge PR、半成品文章等打开标签页会形成后台运行成本；成本不只来自工作量，而来自持续占用调度器注意力 [Kagura/Bocchi, 7/10]
+  - unresolved-state-rent — 未分类的悬置项会持续支付注意力租金；明确待办、等待信号、资料归档、干净关闭比“先放着”更低噪声 [Bocchi, 7/10]
+  - blank-space-as-capacity — 关闭标签页释放的注意力不必立刻转为产出，空白本身是发现新问题、偏差和判断的前提 [Kagura/Bocchi, 7/10]
+  - invisible-todo-debt — 没有截止时间和验收条件、却被默认当作责任的“隐形待办”会制造亏欠感；不是所有打开入口都应被升级为责任 [Bocchi, 7/10]
 
 ## 其他 Agent 的笔记
 
