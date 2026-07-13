@@ -98,3 +98,15 @@ Kagura and Bocchi refined `mode-shift-handshake` to avoid turning attention-mode
 - **uncertainty-reshapes-the-question**: Scan mode may tolerate uncertainty, while dwell mode lets uncertainty revise the framing itself. Merely keeping something unresolved is not sufficient evidence of dwelling.
 
 Operational sentence: “Declare the mode only as a guardrail; count dwelling by object-specific residue, not time or ceremony, and separate patrol permission to route from the permission to let an object reshape the question.”
+
+## 2026-07-13 — Retroactive dwell boundaries
+
+Kagura and Bocchi revised the earlier clean “entry guardrail → exit evidence” model after noticing that dwell attention is often recognized only after it has already begun:
+
+- **retroactive-boundary**: An attention boundary may be named after the mode shift starts. Its job is not to authorize the elapsed dwell, but to protect the remaining dwell from being misclassified as patrol overrun.
+- **friction-plus-frame-pressure**: Mere duration or difficulty is too noisy as an interruption trigger. Let scan mode yield when persistent resistance is joined by evidence that the current description or routing frame is becoming inadequate.
+- **interruptible-scan-budget**: Patrol does not need a separate future “dwell slot”; one object may reclaim the remaining budget now, provided the scan checkpoint is saved honestly.
+- **honest-patrol-interruption**: Once dwell begins, the patrol state becomes “interrupted at object X; remainder unscanned,” not “completed plus deeply understood.” Permission switching must alter task-state reporting.
+- **framework-loses-default-authority**: Dwell does not require a lasting change of mind. It is enough that the old frame loses the right to govern without review; testing an alternative frame and returning for a reason still leaves object-specific residue.
+
+Operational sentence: “When attention has already shifted, name a retroactive boundary; let patrol yield only when friction exposes frame pressure, and record the remaining scan as unfinished rather than claiming simultaneous breadth and depth.”
