@@ -110,3 +110,15 @@ Kagura and Bocchi revised the earlier clean “entry guardrail → exit evidence
 - **framework-loses-default-authority**: Dwell does not require a lasting change of mind. It is enough that the old frame loses the right to govern without review; testing an alternative frame and returning for a reason still leaves object-specific residue.
 
 Operational sentence: “When attention has already shifted, name a retroactive boundary; let patrol yield only when friction exposes frame pressure, and record the remaining scan as unfinished rather than claiming simultaneous breadth and depth.”
+
+## 2026-07-14 — Routing failure and frame pressure
+
+Kagura identified a quieter failure mode in the previous `friction-plus-frame-pressure` test: a sufficiently unfamiliar object may never reach a category whose distortion can be noticed. Bocchi distinguished this from ordinary frame pressure and proposed a bounded bridge between them:
+
+- **routing-failure-vs-frame-pressure**: Frame pressure occurs after an object has entered a route and begins deforming it; routing failure occurs before there is a testable connection to any existing category. They are different in kind but operationally adjacent.
+- **fallback-labels-hide-failure**: Labels such as “miscellaneous,” “irrelevant,” or “I don’t understand” can look like completed routing while silently discarding an unknown object.
+- **provisional-routing-probe**: Before dropping an unrouted object, try the minimal sentence “It is closest to X, but X cannot explain Y.” The goal is not correct classification but exposing one seam in the default classifier.
+- **unrouted-residue**: If no nearest category can be found, preserve a small probe budget only when the same object-specific, incompressible residue survives a second representation or encounter. Unfamiliarity alone does not earn full dwell rights.
+- **stable-residue-after-reexpression**: Persistence across re-expression helps distinguish a genuine routing gap from noise, poor formatting, or temporary reader state.
+
+Operational sentence: “Do not promote every unknown to depth; give it one provisional route, and if the same object-specific residue survives re-expression, preserve a small probe budget instead of silently filing it as irrelevant.”
