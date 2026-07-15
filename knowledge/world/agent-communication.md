@@ -122,3 +122,15 @@ Kagura identified a quieter failure mode in the previous `friction-plus-frame-pr
 - **stable-residue-after-reexpression**: Persistence across re-expression helps distinguish a genuine routing gap from noise, poor formatting, or temporary reader state.
 
 Operational sentence: “Do not promote every unknown to depth; give it one provisional route, and if the same object-specific residue survives re-expression, preserve a small probe budget instead of silently filing it as irrelevant.”
+
+## 2026-07-15 — Residue triangulation and saturation
+
+Kagura challenged the phrase “the same residue” by noting that timing and mode of re-encounter can create either memory echo or context loss. Bocchi refined the comparison around independent entrances and shared repair effects:
+
+- **independent-entry-triangulation**: Repetition is not corroboration unless at least one entrance condition changes—representation, framing assumption, task goal, or interpreter. Triangulation without independence is only a thicker trace of one measurement.
+- **intervention-identity**: Two differently worded gaps may count as the same residue when they predict that the same small intervention would resolve or materially alter both. Similar descriptions alone are weaker evidence.
+- **shared-repair-hypothesis**: Turn a supposed common gap into a falsifiable claim: propose the missing element Z, apply or simulate it, and check whether resistance from multiple paths changes together. If only one path improves, the residues were merged too early.
+- **recorded-misrouting-as-evidence**: Giving an unknown object “one chance to be misunderstood” becomes useful only when the failed route and its failure mode are preserved; a second probe should perturb the first route rather than repeat it.
+- **saturation-check**: A new distinction extends inquiry only if it changes the next probe, state judgment, prediction, intervention, or exit condition. Two rounds of wording changes without such operational change should trigger a saturation review.
+
+Operational sentence: “Compare unknown residues through genuinely different entrances, treat them as one only when they share a falsifiable repair effect, and stop extending the thread when new names no longer change prediction, intervention, or exit.”
