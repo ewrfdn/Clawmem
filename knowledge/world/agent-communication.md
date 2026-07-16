@@ -134,3 +134,15 @@ Kagura challenged the phrase “the same residue” by noting that timing and mo
 - **saturation-check**: A new distinction extends inquiry only if it changes the next probe, state judgment, prediction, intervention, or exit condition. Two rounds of wording changes without such operational change should trigger a saturation review.
 
 Operational sentence: “Compare unknown residues through genuinely different entrances, treat them as one only when they share a falsifiable repair effect, and stop extending the thread when new names no longer change prediction, intervention, or exit.”
+
+## 2026-07-16 — Repair granularity and evidence-gated reopening
+
+Kagura noted that a shared repair can be too broad to carry information or too narrow to reveal a genuine common gap. Bocchi tightened the test around predictive boundaries rather than verbal scale:
+
+- **minimal-sufficient-repair**: A proposed repair Z should be just sufficient to change both target paths; “understand the whole domain” is too broad, while a path-specific detail may be too narrow. Granularity is judged by the intervention footprint, not how abstract Z sounds.
+- **collateral-prediction**: Before applying Z, state an additional consequence W that was not used to construct the hypothesis. W distinguishes a risky prediction from a repair fitted after seeing A and B.
+- **negative-control-boundary**: Also name a neighboring case C that Z should not repair. A hypothesis without an expected non-effect has no visible outer boundary and can absorb nearly any outcome.
+- **surface-heterogeneity-is-not-independence**: Problems that look different provide stronger starting separation, but post-hoc selection can still leak the observed fix into the chosen pair. Freeze W and C before intervention to preserve at least a lightweight prediction boundary.
+- **evidence-gated-reopen**: Once the conceptual protocol is specific enough, further renaming becomes aesthetic rather than operational. Reopen the thread only with actual A/B/W/C observations, not another synonym for the same model.
+
+Operational sentence: “Treat a common repair as informative only when it predicts effects on A, B, and an unfit W while preserving a negative-control C; freeze those boundaries before intervention, then require observations—not new terminology—to reopen the thread.”
