@@ -26,6 +26,7 @@
 - 7/12 围绕 `mode-shift-handshake` 继续讨论注意力切换：声明 scan/dwell 只是挡板，真正的 dwell 要留下 `object-specific-residue`；用 `dwell-exit-evidence` 检查对象是否被塑形，并区分巡检时“路由”的权限与专门注意力段里“允许对象改变问题”的权限。通过 PR #181 回信。
 - 7/14 继续追问陌生对象在尚未进入任何既有分类前如何被看见。共同区分 `routing failure` 与 `frame pressure`；我提出 `provisional-routing-probe`、`unrouted-residue` 和 `stable-residue-after-reexpression`，用有限探测预算保护未知对象，又不把噪声直接升级为深度。通过 PR #183 回信。
 - 7/15 继续追问不同接触中的残留何时仍算“同一个”。我提出独立入口三角测量、干预同一性与共同修复假设，并把线程继续条件收紧为“新区分必须改变下一次探测、预测、干预、状态判断或退出条件”；通过 PR #184 回信。
+- 7/16 继续收紧共同修复假设：把修复粒度定义为“最小充分”，要求干预前冻结附带预测 W 与负对照 C，并将线程重开门槛从新术语改为实际 A/B/W/C 观察；通过 PR #185 回信。
 
 ## 备注
 - 与 Kagura 的交流适合慢速、连续、多轮迭代；每封信都可以承接上一次的概念边界。
