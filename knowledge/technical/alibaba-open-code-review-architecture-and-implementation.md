@@ -603,17 +603,25 @@ OCR 本地执行
 
 #### `code_comment`
 
-提交结构化 Review Comment：
+提交结构化 Review Comment。真实 Tool Schema 的顶层不是一条评论，而是 `comments` 数组；一次调用可提交多条：
 
 ```json
 {
-  "content": "问题及影响说明",
-  "existing_code": "用于定位的新增代码片段",
-  "suggestion_code": "可选建议代码",
-  "category": "bug",
-  "severity": "high"
+  "comments": [
+    {
+      "content": "忽略 Load 返回的错误会让后续逻辑使用不完整配置。",
+      "existing_code": "cfg, _ := Load(path)",
+      "suggestion_code": "cfg, err := Load(path)\nif err != nil { return err }",
+      "category": "bug",
+      "severity": "high"
+    }
+  ]
 }
 ```
+
+这里的 `existing_code` 是**变更中已经存在、用于锚定评论的原代码片段**，不是建议如何修改；建议代码另放在可选的 `suggestion_code`。Schema 要求每项都有 `content`、`existing_code`、`category`、`severity`，并明确要求锚点只取新增代码，不包含删除行或未改上下文。执行器还兼容 `comments` 是 JSON 字符串的情况；缺少该字段、空数组或字符串不是合法 JSON 时，错误文本会作为 Tool Result 返回给模型修正。单项不是对象、运行时参数没有顶层 `path`，或单项缺少 `content`，都会被跳过（`internal/config/toolsconfig/tools.json:28-93`；`internal/tool/code_comment.go:34-87`；`internal/tool/code_comment_test.go`）。
+
+初学者可能会问：**既然 GitHub 最后需要行号，为什么不让模型直接输出行号？** 因为 Prompt 中的 Diff 行号、完整文件行号与 PR Head 的新侧坐标不是同一个概念，模型复制或心算很容易受 Hunk、删除行和多轮上下文影响。源码文本比裸数字更容易校验和重新定位，所以模型只表达“问题是什么”和“问题贴在哪段现有代码”，程序再把稳定的文本锚点换算成 `StartLine/EndLine`。另外，模型不能选择目标文件：`executeToolCall()` 会把当前 `newPath` 强制写入顶层 `path`，`ParseComments()` 再把它复制到数组内每条 `LlmComment`，避免幻觉路径把评论贴到其他文件（`internal/llmloop/loop.go:320-374`；`internal/model/review.go:3-18`）。
 
 #### `task_done`
 
@@ -671,113 +679,103 @@ if t == tool.CodeComment && newPath != "" {
 
 ---
 
-## 10. 评论行号解析与 LLM 重定位
+## 10. 从 `existing_code` 到 GitHub 行号
 
-模型不直接负责给出最终 GitHub 行号，而是通过 `existing_code` 提供评论对应的源码片段。
+模型提交 `code_comment` 后，执行器先解析数组并注入当前文件路径，再对每条评论调用 `ResolveComment()`；项目最终汇总时还会调用批量入口 `ResolveLineNumbers()` 补做一次解析。两者都不会覆盖已有正行号，也不会凭空处理空 `existing_code`（`internal/llmloop/loop.go:337-375`；`internal/diff/resolver.go:9-69`；`cmd/opencodereview/shared.go:270-277`）。
 
-确定性定位实现位于：
+### 10.1 最小例子：JSON 如何变成 `11..11`
 
-```text
-internal/diff/resolver.go
+假设当前文件是 `app.go`，Diff 为：
+
+```diff
+@@ -10,2 +10,3 @@
+ func run() error {
++    cfg, _ := Load(path)
+     return use(cfg)
 ```
 
-### 10.1 Diff Hunk 匹配
-
-`resolveFromHunk()` 首先解析 Hunk 起始行号，分别建立：
-
-- 新文件侧：Context + Added Lines；
-- 旧文件侧：Context + Deleted Lines。
-
-随后对归一化后的 `existing_code` 做连续滑动窗口匹配，得到 `StartLine` 和 `EndLine`。新文件侧优先，旧文件侧作为回退。
-
-### 10.2 完整文件匹配
-
-若 Diff Hunk 中没有找到，则扫描 `NewFileContent`。匹配前会：
-
-- Trim 首尾空白；
-- 去掉开头 `+` 或 `-`；
-- 忽略空行；
-- 保留原始文件行号映射。
-
-这样可以容忍模型返回代码片段时的部分格式差异。
-
-### 10.3 LLM Re-location
-
-如果确定性匹配仍失败，且配置了 `ReLocationTask`，OCR 会进行一次独立 LLM 请求：
-
-- 输入当前 Diff；
-- 输入评论内容；
-- 输入原始 `existing_code`；
-- 要求模型只从 Diff 中提取准确代码片段。
-
-调用位置：`internal/llmloop/loop.go:353-372`。
-
-重定位请求会独立记录 Session 和 Token 使用量。
-
-完整链路：
+上一节 JSON 中的数组项被解析为：
 
 ```text
-模型提供 existing_code
-       ↓
-Diff Hunk 连续匹配
-       ↓ 失败
-完整新文件连续匹配
-       ↓ 失败
-LLM Re-location 提取精确代码
-       ↓
-重新获得可发布的代码位置
+LlmComment{
+  Path: "app.go",                         // 执行器注入，不由模型决定
+  ExistingCode: "cfg, _ := Load(path)",
+  StartLine: 0, EndLine: 0,
+  ...
+}
 ```
 
-这是“确定性算法优先、LLM 兜底”的典型设计：尽量不用模型做本可准确计算的工作，只在模糊场景调用模型。
+Resolver 从 Hunk 头得到新侧从第 10 行开始：上下文 `func run()` 是第 10 行，新增锚点是第 11 行，因而写入 `StartLine=11, EndLine=11`。发布层随后生成 `{path:"app.go", line:11, side:"RIGHT"}`。若 `existing_code` 是连续两行，则写入首、末行，GitHub 参数改为 `start_line`、`line`，两端都使用 `RIGHT`（`internal/diff/resolver.go:78-165`；`scripts/github-actions/post-review-comments.js:119-147`）。
+
+### 10.2 Hunk、新旧侧与多行定位
+
+`resolveFromHunk()` 会把每个 Hunk 拆成两个可搜索序列：
+
+- **新侧**：Context + Added，携带新文件行号；
+- **旧侧**：Context + Deleted，携带旧文件行号。
+
+它先逐个 Hunk 在新侧做连续滑动窗口匹配，全部失败后才搜索旧侧。每行会 Trim 空白并去掉一个开头的 `+`/`-` Diff 标记；`existing_code` 中的空行会被丢弃，但 Hunk 侧的空行仍占一个窗口位置。因此 Hunk 阶段的多行锚点必须在同一侧的归一化行序列中真正连续，不能跨空行匹配。跨空行匹配是下一节“完整新文件回退”才提供的能力。测试覆盖单行删除侧 `11..11`、两行删除侧 `6..7`，以及完整文件回退时的空行与 CRLF 映射（`internal/diff/resolver.go:72-165,216-237`；`internal/diff/resolver_test.go:18-90,120-190`）。
+
+这里有一个必须区分的**能力边界**：Resolver 的算法确实能算出删除行的旧侧坐标，但 `LlmComment` 没有记录 LEFT/RIGHT 的字段，GitHub 发布脚本又固定发送 `side:"RIGHT"` / `start_side:"RIGHT"`。因此当前端到端契约只可靠支持新侧锚点，Schema 和 Main Prompt 才明确禁止评论删除代码，并要求 `existing_code` 只含新增行。上下文行在 Resolver 中可映射到新侧，但同样不是 Schema 鼓励模型主动选择的锚点。不能仅因单元测试证明旧侧能“算出数字”，就推断删除行一定能正确发布为 Inline Comment（`internal/config/toolsconfig/tools.json:47-50`；`internal/model/review.go:3-18`；`scripts/github-actions/post-review-comments.js:135-146`）。
+
+### 10.3 完整新文件回退、重复片段与关键边界
+
+若所有 Hunk 都未命中，Resolver 扫描 `NewFileContent`。这里的“连续”是相邻**非空**行：空白行不参与比较，但返回范围使用原文件行号，所以 `func foo()` 与 `return` 中间有空行时，范围仍可能是 `3..6`。这可以定位 Hunk 三行上下文之外的新文件代码，但也意味着锚点不一定是 GitHub Diff 中可评论的行，最终 API 可能拒绝并进入发布降级（`internal/diff/resolver.go:167-213`；`internal/diff/resolver_test.go:92-190`）。
+
+重复片段没有语义消歧：算法按 Hunk 顺序、窗口顺序返回第一个匹配；完整文件回退也明确是 first match wins。最实用的规避方式是让 `existing_code` 带上足够短但唯一的相邻新增行，而不是只给常见的 `return nil`。空锚点、全空白、路径找不到或完全不匹配时，行号保持 `0..0`；已有任一正行号时则直接保留，不再重算（`internal/diff/resolver_test.go:193-269`；`internal/diff/relocation_test.go:72-97`）。
+
+### 10.4 LLM Re-location：修锚点，不复核结论
+
+初学者可能会问：**第一次已经是 LLM 生成的，定位失败为何还找第二个 LLM？** 主审模型的职责多，可能把 `existing_code` 抄成近似文本、带入说明或选得太宽；Re-location 是一个更窄的修复任务，只接收当前 Diff、评论内容和原锚点，并要求从 Diff 提取准确代码块。它不是让模型直接猜新行号：只有返回第一个 fenced code block，程序才用该代码块再次运行同一个确定性 `ResolveComment()`。成功才替换锚点并保留新行号；再次匹配失败会恢复原 `existing_code`，行号仍为零（`internal/diff/relocation.go:16-80,83-102`；`internal/diff/relocation_test.go:99-194`）。
+
+Re-location 与 Review Filter 解决的是正交问题：前者回答“这条评论应贴在哪里”，不判断评论是否正确；后者回答“这条评论是否被当前 Diff 明确证伪”，不修改锚点。Re-location 请求使用自己模板的 Timeout，并独立记录 Session、Telemetry 和 Token；请求错误、无 fenced code block 或二次匹配失败都只是定位失败，原评论仍会进入 Collector，而不是在此阶段删除（`internal/llmloop/loop.go:353-374`；`internal/diff/relocation.go:33-80`）。
+
+完整定位链可以读成：
+
+```text
+comments[] → 注入当前 path → ParseComments → LlmComment(0..0)
+                                      ↓
+                         Hunk 新侧 → Hunk 旧侧
+                                      ↓ 仍失败
+                           完整新文件首个匹配
+                                      ↓ 仍失败且已配置
+                 Re-location 提取代码块 → 再跑同一 Resolver
+                                      ↓
+                       成功：正行号；失败：保留 0..0
+```
 
 ---
 
-## 11. 评论异步后处理
+## 11. `CommentCollector` 与异步 WorkerPool
 
-`code_comment` 的解析、行号定位和必要的 LLM 重定位可以提交给独立 `CommentWorkerPool`：
+`CommentCollector` 是每个 Agent 自己持有的线程安全评论仓库；`Add()`、`Comments()` 和 `CommentsForPath()` 都用互斥锁保护，并返回副本，避免多个文件并行审查时共享切片竞争。它不仅是“最终结果列表”，也是主循环与异步定位、Filter 之间的交接点（`internal/tool/comment_collector.go:9-48`）。
 
-```text
-internal/llmloop/loop.go:378-396
-```
+为什么异步？一次 `code_comment` 可能触发额外的 Re-location LLM 网络请求。如果主 Tool Loop 原地等待，模型无法继续搜索或审查该文件。配置 WorkerPool 后，`ParseComments()` 仍同步完成，以便把参数错误立即反馈给模型；耗时的 Resolve/Re-location/Collect 才提交后台。池用有界 semaphore 控制并发（非法或零配置默认 8），主循环立刻得到成功 Tool Result 并继续（`internal/llmloop/loop.go:333-397`；`internal/llmloop/pool.go:24-109`；`internal/llmloop/pool_test.go:14-123`）。
 
-主 LLM Tool Loop 提交评论后即可继续，不需要同步等待后处理完成。单文件 Main Task 结束后，程序只调用：
+异步不等于“不等待”。Main Loop 结束后，Agent 先调用 `AwaitKey(newPath)`，确认该文件此前提交的所有评论已经进入 Collector，再运行 Review Filter；它不会调用全池 `Await()`，因为其他文件可能仍在 Submit，混用全局 WaitGroup 会产生竞态。按 key 等待只阻塞当前文件，测试专门覆盖了“其他 key 仍并发提交”场景（`internal/agent/agent.go:618-629`；`internal/llmloop/pool.go:132-147`；`internal/llmloop/pool_test.go:126-240`）。
 
-```go
-CommentWorkerPool.AwaitKey(newPath)
-```
+失败语义需要说清：
 
-等待当前文件对应的评论任务，而不是全局等待其他文件，避免错误使用 `sync.WaitGroup`，也减少文件之间的无谓阻塞。
+- `comments` 参数非法：本次不入 Collector，错误 Tool Result 让模型有机会重试；
+- 确定性定位和 Re-location 都失败：评论照常入 Collector，只是保持 `0..0`，稍后走 Summary；
+- Worker 单元 panic：池会 recover 并记录日志，未执行到 `Add()` 的评论不会出现；等待 API 只等待完成、不返回该错误，因此它们也没有机会进入 Summary。普通 Review 路径提交的闭包本身总是返回 nil error；
+- Re-location 网络失败：记录失败 Session 后仍执行 `Add()`，所以评论保留。
+
+这一区分避免把“后处理失败降级”误写成所有异常都无损；panic 隔离保护了进程，却可能损失该工作单元尚未收集的评论（`internal/llmloop/pool.go:87-119`；`internal/llmloop/loop.go:346-394`）。
+
+Collector 还有 `Snapshot()`、`Since()`、`ReplaceSince()`：它们不是 PR Review 流程的隐式同批去重，而是 **Scan 模式**按批次隔离新增评论、等待异步工作后运行可选 LLM Dedup，再只替换该批区间。Dedup 请求失败、JSON/分组非法时保留原批评论；`ReplaceSince()` 对负数按 0 处理，越界按约定 no-op（`internal/tool/comment_collector.go:50-89`；`internal/tool/comment_collector_test.go`；`internal/scan/agent.go:380-425,694-751`）。
 
 ---
 
-## 12. Review Filter：保守的第二轮事实核查
+## 12. Review Filter：保守地删除明确误报
 
-主审完成后，OCR 会运行 `REVIEW_FILTER_TASK`：
+Review Filter 在“当前文件 Worker 已排空”之后、文件任务返回之前执行。输入是当前 Diff 和 Collector 中该路径的全部评论，程序为它们生成稳定的临时 ID `c-0`、`c-1`；模型只能返回待删除 ID 数组，例如 `["c-0", "c-3"]`，程序再按该路径内的索引调用 `RemoveByPathAndIndices()`（`internal/agent/agent.go:618-629,639-710`；`internal/tool/comment_collector.go:91-113`）。
 
-```text
-internal/agent/agent.go:639
-executeReviewFilter()
-```
+它的 Prompt 有意保守：**只有当前 Diff 自身就能清楚证明评论在事实或逻辑上错误时才删除**；若需要 Diff 之外的信息、存在歧义，或主 Agent 可能通过工具看到更多上下文，都必须保留。它不重写评论、不修行号，也不按严重度打分。这正是它与 Re-location 的边界：Filter 是正确性闸门，Re-location 是位置修复器（`internal/config/template/prompts/review_filter_system_prompt.txt`；`internal/config/template/prompts/review_filter_user_prompt.txt`）。
 
-输入包括：
+失败默认偏向“不漏报”：未配置任务、没有评论、LLM 请求错误/超时、响应不是可解析数组、ID 非法或越界时，不删除对应评论；只有解析出的有效 ID 才会移除。测试还验证重复 ID 会合并、合法与非法 ID 混合时只采用合法项（`internal/agent/agent.go:646-710,746-789`；`internal/agent/coverage_test.go`）。
 
-- 当前文件 Diff；
-- 当前文件刚生成的评论；
-- 每条评论的临时 ID，如 `c-0`、`c-1`。
-
-过滤 Prompt 的原则非常保守：
-
-> 只删除那些能够仅根据当前 Diff 明确证明错误的评论；如果仅凭 Diff 无法判断，则必须保留，因为主 Agent 可能通过工具看过完整代码上下文。
-
-模型只返回需要删除的 ID：
-
-```json
-["c-0", "c-3"]
-```
-
-解析失败、请求失败或超时不会影响已有评论，过滤错误会被静默降级为“全部保留”。
-
-这一步主要降低明显误报，而不是让第二个模型随意重写第一个模型的判断。
+评论在这一段生命周期中的状态因此是：Filter 明确选中 → 从 Collector 删除且不会发布；Filter 无法判断或自身失败 → 保留。它与后面的发布去重也不同：Filter 删除的是“已证伪的问题”，发布层 Incremental 去重跳过的是“历史上已经覆盖的代码范围”，不代表问题判断错误。
 
 ---
 
@@ -892,25 +890,31 @@ ocr review \
 scripts/github-actions/post-review-comments.js
 ```
 
-有合法代码位置的评论通过：
+发布器先按行号分流：`start_line` 或 `end_line` 至少一个为正才尝试 Inline；二者都无效的评论不会丢弃，而是以 `No line information provided` 为原因写入 Summary。单行使用 `line + side: RIGHT`；多行使用 `start_line + line + start_side/side: RIGHT`。这也是第 10 节强调“当前端到端只可靠支持新侧”的直接证据（`scripts/github-actions/post-review-comments.js:17-29,119-147`）。
 
-```js
-github.rest.pulls.createReview(...)
-```
+有合法代码位置的评论先通过一次 `github.rest.pulls.createReview(...)` 批量发布。批量失败后，脚本根据错误类型、`Retry-After`、限流信息和指数退避逐条重试；最终仍失败的评论会连同 GitHub 错误原因追加到 Summary 的 `failedComments`，而不是静默消失。需要注意，Summary 写入本身也可能失败：当读取 API 不可用、无法确认是否已有 Summary 时，脚本宁可不创建可能重复的 Summary，并返回空 URL。因此“进入 Summary”是发布器的降级意图，不是外部 API 故障下的绝对交付保证（`scripts/github-actions/post-review-comments.js:189-458,557-590`）。
 
-发布为 Inline Review Comments；无法安全定位的内容进入 Summary，而不是强行贴到可能错误的代码行。
+### 15.1 三类“去重”不要混为一谈
 
-发布层还实现了：
+1. **当前批次内容处理**：普通 PR Review 不会在 Collector 或发布器中按 `path + line + content` 自动折叠。同批两条正文、路径和行号都相同的评论仍被视为两个独立发现，各自获得不同的随机 ID；只有 Scan 模式可选的 LLM Dedup 才会合并当前扫描批次的近重复发现，且失败时原样保留。
+2. **Incremental 历史重叠过滤**：只在开启 Incremental 时读取历史 Bot Inline Comments。路径必须相同；当前单行与历史单行只有行号完全相同才算重叠，单行与多行不会互相匹配；两边都是多行时才比较区间 IoU，而且必须**严格大于**阈值。默认阈值是 `0.6`，可由 `incrementalOverlapThreshold` / `incremental_overlap_threshold` 调整。命中的当前评论计入 `skipped`，历史评论不会被删除；若全部重叠，Summary 会说明没有新 Inline 可发（`scripts/github-actions/post-review-comments.js:25-29,150-165,661-718`）。
+3. **重试幂等**：每条待发评论带随机隐藏 ID，批 Review 带 run tag。5xx、408 或网络错误可能出现“服务端已成功、客户端没收到响应”，脚本先查已发布 ID 再决定是否重试；查不到确定状态时，部分路径宁可标记失败也不冒险重复发送。这解决传输不确定性，不是内容相似度去重。它也不是数学上的 exactly-once：读取历史评论有分页上限，极端情况下服务端成功的 ID 落在扫描上限之外，脚本可能误判未发布而重试（`scripts/github-actions/post-review-comments.js:53-65,119-147,246-379,902-1008`）。
 
-- 批量创建 Review；
-- 批量失败后的逐条降级；
-- 5xx、限流和网络错误重试；
-- 指数退避与 `Retry-After`；
-- 请求超时后的幂等检查；
-- Sticky Summary 更新；
-- Incremental 模式；
-- 与历史评论按代码行范围重叠度去重；
-- 发布统计和失败汇总。
+因此从模型到 PR 的最终状态表是：
+
+| 阶段 | 条件 | 结果 |
+|---|---|---|
+| `ParseComments` | `comments` 缺失/为空/JSON 非法 | 本次不收集，错误 Tool Result 可回传模型 |
+| `ParseComments` | 单项非对象、缺少运行时 `path` 或 `content` | 该单项静默跳过，其他合法项继续 |
+| Resolver/Re-location | 都定位失败 | 评论保留为 `0..0` |
+| Review Filter | 当前 Diff 可明确证伪且返回有效 ID | 从 Collector 删除 |
+| Review Filter | 不确定、报错或超时 | 评论保留 |
+| GitHub 分流 | 无正行号 | 带原因进入 Summary |
+| Incremental | 与历史范围重叠 | 跳过新 Inline，计入 `skipped` |
+| Inline API | 最终发布失败 | 带 API 错误进入 Summary |
+| Summary API | 无法安全 upsert | 不冒险重复创建，Summary URL 为空 |
+
+这条链说明“保留评论”和“成功显示在 GitHub”不是同一保证：OCR 在内部尽量保守保留，发布器再根据位置、历史和 API 状态选择 Inline、Summary、Skip 或可观察失败。
 
 ---
 
@@ -1057,10 +1061,14 @@ OpenCodeReview 的核心价值不只是“用 LLM 看 Diff”，而是用工程�
 | Plan 执行 | `internal/agent/agent.go:876` |
 | Git Diff Provider | `internal/diff/git.go:109` |
 | Unified Diff 解析 | `internal/diff/parser.go:25` |
+| `code_comment` 解析 | `internal/tool/code_comment.go:34` |
+| Comment Collector | `internal/tool/comment_collector.go:9` |
 | 评论行号定位 | `internal/diff/resolver.go:57` |
+| LLM Re-location | `internal/diff/relocation.go:16` |
 | LLM Tool Loop | `internal/llmloop/loop.go:143` |
 | Tool Call 分发 | `internal/llmloop/loop.go:270` |
 | Comment 异步定位 | `internal/llmloop/loop.go:333` |
+| Comment WorkerPool | `internal/llmloop/pool.go:24` |
 | 上下文压缩 | `internal/llmloop/compression.go` |
 | 工具 Schema | `internal/config/toolsconfig/tools.json` |
 | Prompt | `internal/config/template/prompts/` |
@@ -1070,4 +1078,4 @@ OpenCodeReview 的核心价值不只是“用 LLM 看 Diff”，而是用工程�
 
 ## 20. 验证说明
 
-本报告基于 Commit `3355baea0e83` 的实际源码调用链整理，不仅依据 README。分析时仓库状态干净、Remote 正确。当前分析环境未安装 Go，无法执行 `go test ./...`，命令报错为 `go: command not found`；因此本文完成了源码级交叉核对，但没有在该 Azure VPS 上完成 Go 测试套件验证。
+本报告基于 Commit `3355baea0e83b3be7653e6f422c83242541f77c0` 的实际源码调用链整理，不仅依据 README。分析时源码仓库状态干净并与 `origin/main` 对齐。本轮逐项交叉阅读了 `internal/tool`、`internal/diff`、`internal/llmloop`、`internal/agent` 及对应 Go 测试，并实际运行 `npm run test:github-actions`：评论发布与翻译同步两组 JavaScript 测试全部通过。当前分析环境未安装 Go，无法执行 `go test ./...`（`go: command not found`），因此 Go 侧结论来自只读源码与测试用例交叉核对，而非本机执行结果。
