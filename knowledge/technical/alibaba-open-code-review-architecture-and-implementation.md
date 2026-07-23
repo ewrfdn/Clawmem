@@ -50,34 +50,110 @@ Text / JSON / GitHub PR Review
 
 ## 2. 程序入口与运行模式
 
-CLI 分发入口位于：
+本文将 OpenCodeReview 的可执行文件简称为 `ocr`。程序入口是
+`cmd/opencodereview/main.go:15-28` 的 `main()`：它先设置版本和内嵌资源加载器，
+再初始化 Telemetry，最后调用 `dispatch()`；任一子命令返回错误时，统一向标准错误输出
+`Error: ...` 并以状态码 1 退出。`dispatch()` 并不会把“无参数”偷偷解释为一次 Review，
+而是打印总帮助；只有显式执行 `ocr review`（或别名 `ocr r`）才进入本报告讨论的
+Diff Review 流程。其他顶层命令还包括 `scan`、`config`、`llm`、`rules`、`viewer`、
+`delegate` 和 `session`（`cmd/opencodereview/main.go:30-68`）。
 
-- `cmd/opencodereview/main.go`
-- `cmd/opencodereview/review_cmd.go:21`：`runReview()`
+> **初学者可能会问：`review` 与 `scan` 有什么根本区别？**
+> `review` 的输入是 Git 变化，因此必须位于带工作树的 Git 仓库；`scan` 可以检查完整文件，
+> 也允许非 Git 目录。`review` 通过 `loadCommonContext(..., requireGit=true)` 明确实施这一约束，
+> 并把从仓库子目录启动时的路径提升到 Git 顶层，保证 Diff 中的仓库根相对路径、规则路径和
+> 文件读取基准一致；裸仓库因没有工作树会直接报错（`cmd/opencodereview/shared.go:40-78,81-123`；
+> 对应测试见 `cmd/opencodereview/shared_test.go:80-217`）。
 
-`runReview()` 主要完成：
+`cmd/opencodereview/review_cmd.go:21-155` 的 `runReview()` 是 Review 编排层。按实际执行顺序，
+它完成以下数据变换：
 
-1. 解析命令行参数；
-2. 确认 Git 仓库根目录；
-3. 加载系统、全局、项目及 CLI 指定的 Review Rule；
-4. 校验 Git Ref，防止参数注入；
-5. 加载 LLM Runtime 和 Tool 配置；
-6. 注册内置工具及 MCP 动态工具；
-7. 构建 `agent.Agent`；
-8. 调用 `Agent.Run()`；
-9. 输出文本或 JSON 结果。
+1. `parseReviewFlags()` 把字符串参数变为 `reviewOptions`，并在访问仓库前排除冲突模式、
+   缺失的 `--from/--to` 配对、非法 audience，以及 `--preview` 与 `--resume` 同用等错误
+   （`cmd/opencodereview/flags.go:95-193`）。
+2. `loadCommonContext()` 加载并校验内嵌 Prompt 模板，解析 Git 顶层目录，建立 Review Rule
+   解析器、文件过滤器和共享的 Git 子进程并发限制器；随后把 CLI 的 `--exclude` 追加到
+   规则层给出的排除项（`cmd/opencodereview/shared.go:24-78,183-194`）。
+3. `validateReviewRefs()` 拒绝以 `-` 开头或不能由 `git rev-parse --verify` 解析为 Commit 的
+   `--from`、`--to`、`--commit`，然后才允许这些值流入后续 Git 命令
+   （`cmd/opencodereview/review_cmd.go:39-47,215-241`）。
+4. 组装背景信息：Commit 模式在未显式提供 `--background` 时使用 Commit Message；
+   `--background-file` 则相对 Git 顶层读取并与内联背景合并
+   （`cmd/opencodereview/review_cmd.go:44-62`）。
+5. 若为 `--preview`，只构建一个最小 `Agent` 获取并过滤 Diff，输出待审文件后返回；这条分支
+   位于 `loadLLMRuntime()` 之前，所以**预览不要求 API Key，也不会调用 LLM 或启动 MCP Server**
+   （`cmd/opencodereview/review_cmd.go:64-66,244-260`；`internal/agent/preview.go:61-108`）。
+6. 正式 Review 才加载可恢复 Session、LLM 与 Tool 配置，按 Review 模式创建 `FileReader`，
+   注册内置工具和可用的 MCP 工具，再把所有依赖注入 `agent.New()`。
+7. `Agent.Run()` 获取并解析 Diff、过滤文件、并发启动逐文件 Agent，最终把评论、Token/Tool
+   统计和 Session 信息交给 `emitRunResult()` 输出；失败时保留 Session ID 供 `--resume`
+   重试（`cmd/opencodereview/review_cmd.go:68-154`；`internal/agent/agent.go:189-235`）。
 
-### 2.1 三种 Diff 模式
+最小运行时序可概括为：
 
-OCR 支持三种审查模式：
+```text
+argv
+  -> dispatch("review")
+  -> 参数校验 + 仓库/规则/模板初始化
+  -> [preview: Diff -> 过滤 -> 文件清单 -> 返回]
+  -> LLM/工具/MCP 初始化
+  -> Agent.Run(): Diff -> model.Diff[] -> 文件过滤 -> 逐文件 LLM Tool Loop
+  -> model.LlmComment[] -> 文本或 JSON
+```
 
-| 模式 | 输入 | 用途 |
-|---|---|---|
-| Workspace | 无 Commit/Range 参数 | 审查 staged、unstaged 和 untracked 文件 |
-| Commit | `--commit <ref>` | 审查单个 Commit 相对于父提交引入的变化 |
-| Range | `--from <ref> --to <ref>` | 审查分支或 PR 范围 |
+### 2.1 “配置”不是一个文件：四类配置及加载时机
 
-实现位于 `internal/diff/git.go:36-43`。
+初次阅读容易把 Prompt、工具、规则和模型凭据都理解成同一份配置。源码实际上把它们分成
+四条独立输入链：
+
+| 配置类别 | 默认来源 | CLI 覆盖/补充 | 何时加载、产生什么结果 |
+|---|---|---|---|
+| Review Prompt 与预算 | 编译进二进制的 `task_template.json` 和 `prompts/*` | `--max-tools` 只在高于模板值时提高上限 | `loadCommonContext()` 最先加载并 `Validate()`，得到 `template.Template`；`--max-tools` 的非零值低于 10 时先被钳制到 10（`internal/config/template/template.go:45-130,188-199`；`cmd/opencodereview/shared.go:49-59`；`cmd/opencodereview/flags.go:179-186`） |
+| Review Rule 与文件过滤 | 内嵌系统规则；可选全局 `~/.opencodereview/rule.json` 和仓库根 `.opencodereview/rule.json` | `--rule <file>` 的优先级最高；`--exclude` 再追加排除模式 | `rules.NewResolver()` 返回“按文件选择规则”的 `Resolver` 和独立的 `FileFilter`。规则匹配优先级为 CLI > 项目 > 全局 > 系统；文件 include/exclude 则取首个实际配置了过滤项的高优先级层，并非四层合并（`internal/config/rules/system_rules.go:237-311,313-381`） |
+| LLM Endpoint、语言和 MCP | `~/.opencodereview/config.json` | `--model` 覆盖本次模型；部分 LLM 字段可来自环境变量 | 正式 Review 的 `loadLLMRuntime()` 读取用户配置，将 `language` 指令写入 Prompt，解析 Endpoint，创建 LLM Client；配置文件不存在本身不是错误，但若所有 Endpoint 来源都不完整，随后解析会失败（`cmd/opencodereview/shared.go:126-180`；`cmd/opencodereview/config_cmd.go:14-30,211-271`） |
+| LLM 可见的 Tool 定义 | 编译进二进制的 `internal/config/toolsconfig/tools.json` | `--tools <file>` 可整体换成外部 JSON；用户配置中的 `mcp_servers` 可增加动态工具 | `toolsconfig.Load()` 按 `plan_task` / `main_task` 生成两组工具定义；`buildToolRegistry()` 注册真实执行器，MCP 启动成功后再把其定义追加到两阶段（`internal/config/toolsconfig/toolsconfig.go:19-53`；`cmd/opencodereview/review_cmd.go:86-100,263-322`） |
+
+> **初学者可能会问：参数、工具定义和工具执行器为什么分开？**
+> Tool 定义是发给 LLM 的 JSON Schema，说明“工具叫什么、参数是什么”；Registry 中的 Provider
+> 才是在本机真正读取文件、搜索代码或收集评论的实现。只有两边同名配对，LLM 返回的 Tool Call
+> 才能被执行。`agent.BuildToolDefs()` 负责前者，`buildToolRegistry()` 负责后者
+> （`internal/agent/agent.go:978-996`；`cmd/opencodereview/review_cmd.go:315-322`）。
+
+LLM Endpoint 的优先级尤其容易误读。`ResolveEndpointWithModelOverride()` 依次尝试：
+
+1. `~/.opencodereview/config.json`（新 provider 结构或旧 `llm` 结构）；
+2. `OCR_LLM_URL` / `OCR_LLM_TOKEN` / `OCR_LLM_MODEL`；
+3. Claude Code 的 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL`；
+4. Shell RC 文件。
+
+每个来源必须同时解析出 URL、Token、Model 才算可用，先成功者获胜；`--model` 会在每种策略内
+覆盖模型，provider 声明了可选模型列表时还会校验该值。`OCR_LLM_TIMEOUT` 和
+`OCR_LLM_EXTRA_HEADERS` 是在选中来源后再施加的全局覆盖
+（`internal/llm/resolver.go:58-121,243-403`）。值得注意的是，`review` 固定读取默认用户配置路径，
+不会采用 `OCR_CONFIG_PATH`；该变量只供诸如 `ocr llm test` 的只读命令使用，以免泄漏的环境变量
+把配置写入或常规 Review 重定向到意外位置（`cmd/opencodereview/config_cmd.go:14-30`；
+`cmd/opencodereview/shared.go:152-169`）。
+
+配置失败的处理也分为“关键依赖”和“可选扩展”：模板、规则文件、工具 JSON、用户配置 JSON、
+Endpoint 或 Resume 校验失败都会中止 Review；单个 MCP Server 缺少命令、Setup 失败或启动失败时
+只输出警告并跳过该 Server，Review 继续使用其余工具。已启动的 MCP Client 在 `runReview()`
+返回时统一关闭（`cmd/opencodereview/review_cmd.go:88-100,263-312`）。
+
+### 2.2 三种 Review / Diff 模式
+
+这里的 **Diff** 是 Git 用统一文本格式表达的“旧版本到新版本有哪些行发生变化”；Review 模式
+决定“旧/新版本从哪里取”，同时也决定 LLM 调用 `file_read` 等工具时应该读取哪个版本的完整文件。
+
+| 模式 | CLI 输入 | Diff 的比较对象 | 工具读取完整文件的来源 |
+|---|---|---|---|
+| Workspace | 不传 Commit/Range 参数 | `HEAD` 对工作区（涵盖已暂存和未暂存），再补未跟踪文件 | 当前磁盘文件 |
+| Commit | `--commit <ref>` | 指定 Commit 对其第一父提交引入的变化 | `git show <commit>:<path>` |
+| Range | `--from <ref> --to <ref>` | `merge-base(from,to)` 对 `to` | `git show <to>:<path>` |
+
+Diff Provider 的模式选择位于 `internal/agent/agent.go:302-329`，具体 Git 调用位于
+`internal/diff/git.go:36-88,109-165`；完整文件读取模式则是另一组对应枚举，位于
+`internal/tool/filereader.go:18-77`。两者必须同步：例如 Range Review 的 Diff 右侧是 `to`，
+若工具错误地读取当前磁盘文件，LLM 看到的行号和代码内容就可能与待审版本不一致。
 
 Range 模式先执行：
 
@@ -108,6 +184,18 @@ git diff --staged
 ```
 
 未跟踪文件不在普通 `git diff` 中，OCR 会单独获取并人为构造 Unified Diff。
+
+> **初学者可能会问：工作区模式为何不直接运行三条 Git Diff 再拼接？**
+> `git diff HEAD` 已同时覆盖索引区（staged）和工作树（unstaged）相对 `HEAD` 的净变化，重复拼接
+> staged/unstaged Diff 反而可能造成重复。只有无首个 Commit、`HEAD` 不存在时才回退
+> `git diff --staged`；未跟踪文件通过 `git ls-files --others --exclude-standard` 单列并构造
+> “从 `/dev/null` 新增文件”的 Unified Diff（`internal/diff/git.go:267-337`）。若读取某个未跟踪文件
+> 失败，当前实现会跳过该文件而不是中止整次 Review（`internal/diff/git.go:289-294`）。
+
+三个模式的参数互斥在访问 Git 前就会校验：`--commit` 不能与 Range 同用，`--from` 与 `--to`
+必须成对出现；无二者即 Workspace。`--resume` 又只支持 Commit 或 Range，因为工作区内容会持续
+变化，源码明确拒绝 Workspace Resume（`cmd/opencodereview/flags.go:152-171`；
+`cmd/opencodereview/review_cmd.go:157-180`）。
 
 ---
 
