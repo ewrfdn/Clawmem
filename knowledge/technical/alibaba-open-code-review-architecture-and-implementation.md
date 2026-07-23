@@ -450,18 +450,23 @@ filterDiffs()
 dispatchSubtasks()
 ```
 
-`dispatchSubtasks()` 位于 `internal/agent/agent.go:350`。它以单文件为并发单位，默认并发数为 8，并使用 Semaphore 限流。
+`dispatchSubtasks()` 位于 `internal/agent/agent.go:350-450`。它以**文件审查子任务**为并发单位，用有界 channel 作 Semaphore；`MaxConcurrency <= 0` 时实现取 8。因而“并发 8”是最多同时有 8 个文件执行各自的 Plan、Main Tool Loop 和收尾，**不是**最多 8 次 LLM 请求，也不是 Git 或评论后处理的全局上限。评论 Re-location 另有 WorkerPool（第 11 节），Git 子进程还共享一把默认容量 16、等待可被 context 取消的 Semaphore（`internal/llmloop/pool.go:24-57`；`internal/gitcmd/runner.go:11-38`）。
 
-每个文件拥有：
+每个文件拥有独立 Prompt、Plan 结果、LLM Tool Loop、`FileSession`、超时和检查点状态，目的是把上下文、成本与故障域限制在一个文件。最小状态转换可写成：
 
-- 独立 Prompt；
-- 独立 Plan 结果；
-- 独立 LLM Tool Loop；
-- 独立文件 Session；
-- 独立超时；
-- 独立成功、失败或复用状态。
+```text
+待调度（仅内存中，尚无 checkpoint）
+  ├─ Resume 命中 ─────────────→ review_item_reused（恢复评论，不发 LLM 请求）
+  └─ 启动 goroutine → Plan/Main/Filter
+                         ├─ 明确 task_done → review_item_done（评论可为空）
+                         └─ error / panic / 保护性停止 → review_item_failed
+```
 
-单个文件 Panic 或失败会被隔离，其他文件继续执行。只有全部已调度文件都失败时，整体 Review 才返回错误。
+这里并不存在一个可任意跳转的 `enum` 状态机；可恢复状态就是 JSONL 中三类终态记录。删除文件直接跳过，不创建这三类检查点；Prompt 超阈值或 Main 未调用 `task_done` 也记为 `failed`，不能伪装成可复用成功（`internal/agent/agent.go:374-447,453-500,592-635`；`internal/agent/agent_test.go:595-727`）。
+
+普通 error 与 panic 都在文件 goroutine 内转成失败记录和 warning；panic 还会 `recover` 并打印堆栈，所以其他文件继续。只有**返回 error 或 panic** 的数量等于已调度文件数时，整体才返回 `all N file review(s) failed`；保护性停止虽写 `review_item_failed`，当前实现不增加这个汇总计数，全部这样停止时未必返回整体错误。这是“检查点失败”和“进程级失败”的重要边界（`internal/agent/agent.go:387-447`；`internal/agent/coverage_test.go:634-656`）。
+
+文件超时 `ConcurrentTaskTimeout` 以分钟计，0 表示不设置；context 在取得文件 Semaphore、进入 goroutine后才创建，覆盖 Plan、Main、工具调用以及 Review Filter 所收到的父 context（`internal/agent/agent.go:93-97,371-413,521-636`）。但它不是硬杀死：排队等待文件槽位的时间不计入，底层 LLM/工具必须合作响应 context；`CommentWorkerPool.AwaitKey()` 本身也没有 context 分支，若后台工作不返回，等待仍可能超过期限（`internal/llmloop/loop.go:274-306`；`internal/llmloop/pool.go:132-147`）。另外模板 `LlmConversation.Timeout` 目前只在 Re-location 被读取并按秒建立更短 context；Plan/Main 的同名字段未在其调用路径消费，不能把它当成阶段级超时（`internal/diff/relocation.go:20-54`；`internal/agent/agent.go:876-906`）。
 
 ### 6.1 为什么按文件拆分
 
@@ -812,7 +817,9 @@ Review Filter 在“当前文件 Worker 已排空”之后、文件任务返回�
 
 阈值判断使用本地 tokenizer 对每条消息的文本做粗略估算；默认按 `cl100k_base`，`o1/o3/o4` 模型名使用 `o200k_base`，加载失败时退化为“字节数 / 4”（`internal/llm/client.go:260-288`、`internal/llmloop/compression.go:63-71`）。这个估算没有完整计算 API 包装和 Tool Schema 开销，所以是保护性近似值，不应当成账单。
 
-运行统计则取自每次 LLM 响应的 `usage`：分别累计 Input/Prompt、Output/Completion、Cache Read 和 Cache Write Token；Main、Plan、压缩、重定位和过滤等 OCR 自己发出的模型请求都会在相应路径计入 Runner（例如 `internal/llmloop/loop.go:190-197`、`compression.go:244-250`、`internal/agent/agent.go:916-923`）。若 Provider 没返回 usage，OCR 无法凭本地估算补齐真实计费统计。
+运行级统计则取自每次 LLM 响应的 `usage`：Runner 用原子计数跨并发文件累计 Input/Prompt、Output/Completion、Cache Read 和 Cache Write Token；Main、Plan、压缩、Re-location 和 Filter 等 OCR 自己发出的模型请求都在各自路径调用同一套累加逻辑，最终进入文本/JSON 结果，供调用者或 CI 看本次运行成本（`internal/llmloop/loop.go:119-131,190-197`；`internal/llmloop/compression.go:244-250`；`internal/agent/agent.go:270-287,916-923`；`cmd/opencodereview/output.go:238-260`）。若 Provider 不返回 usage，Runner 不累加，因而运行汇总不能冒充真实账单。
+
+Session 记录与运行汇总在缺失 usage 时有一个容易忽略的差异：`TaskRecord.SetResponse()` 会用本地 tokenizer 估算该请求的 Prompt/Completion 并写入 JSONL，但 Cache Read/Write 保持 0；这只是便于逐请求诊断的近似值，并不会回填 Runner 汇总（`internal/session/history.go:276-328`）。所以看到 Session 有 token 数、最终 JSON 汇总却为 0 并不矛盾，表示供应商未给可聚合的 Usage。
 
 这里的 **Cache Read/Write Token** 是 LLM Provider 在响应 Usage 中报告的 Prompt Cache 指标。OCR 只是兼容解析 Anthropic、OpenAI Responses 及部分代理的字段并累加（`internal/llm/usage_resolver.go:35-60`）；它不表示 OCR 缓存了模型答案，也不同于第 14 节基于 Fingerprint 的 Resume 结果复用。不同 Provider 对 Cache Token 是否已包含在 Prompt/Total Token 中定义不同，`resolveUsage()` 只在缺少 Total 时按来源语义回算，以避免 OpenAI 风格缓存 Token 被重复相加（`internal/llm/usage_resolver.go:71-108`）。
 
@@ -820,45 +827,41 @@ Review Filter 在“当前文件 Worker 已排空”之后、文件任务返回�
 
 ## 14. Session、断点恢复与可观测性
 
-OCR 会保存文件级任务记录，包括：
+### 14.1 Session 保存什么、何时落盘
 
-- Plan Task 请求和响应；
-- Main Task 每轮消息和 Tool Result；
-- Re-location Task；
-- Review Filter Task；
-- 文件完成、失败或复用状态；
-- 评论结果；
-- Token 使用量和耗时。
+`SessionHistory` 是一次 Review 的并发安全运行容器：顶层保存 Session ID、仓库/分支/模型、Review 与 Diff 范围、恢复来源、起止时间、LLM 失败数；其下按路径建立 `FileSession`，再按 Plan、Main、Memory Compression、Re-location、Review Filter 分类保存请求消息、响应、Tool Result、Token 和耗时（`internal/session/history.go:16-88,99-152,221-365`）。这既提供逐请求诊断记录，也承载 Resume 所需的文件终态。
 
-### 14.1 Resume
-
-每个文件的 Fingerprint 由以下内容计算 SHA-256：
+新建 Session 就创建：
 
 ```text
-Review Mode + Old Path + New Path + Diff
+$HOME/.opencodereview/sessions/<编码后的仓库绝对路径>/<session-id>.jsonl
 ```
 
-实现位于 `internal/agent/agent.go:509-511`。
+目录和文件权限分别为 `0700`、`0600`。记录用 `uuid`/`parentUuid` 串成写入链：创建时写 `session_start`；每次请求、响应、错误和 Tool Result 随执行追加；文件结束写 `review_item_done|failed|reused` 并立即 `Flush()`；`Agent.Run()` 正常返回前 `Finalize()` 写 `session_end`、flush 并 close（`internal/session/persist.go:70-128,130-213,215-340`；`internal/agent/agent.go:189-235`）。因此它不是结束时才一次性导出的报告；文件检查点落盘后，即使后续文件失败，也有机会恢复。
 
-恢复执行时，Fingerprint 未变化的文件可直接复用此前评论；只有变化过的文件重新审查。这能显著降低大型 Review 在部分失败、超时或重试时的成本。
+边界也要明确：普通 LLM 记录写入缓冲区，不是每条都 flush；创建 writer 失败只打印 warning，Marshal/Write/Flush/Close 错误也没有向 Review 主流程传播。进程被强杀时，尾部缓冲记录或 `session_end` 可能缺失；但已 flush 的文件检查点仍可被逐行重放。JSONL 还包含完整 Prompt、模型响应、工具参数/结果和评论，不受 Telemetry 开关控制，可能含源码或业务上下文，需按敏感运行日志管理（`internal/session/history.go:125-131`；`internal/session/persist.go:120-128,181-213,215-340`）。
 
-### 14.2 Telemetry
+### 14.2 Fingerprint / Resume 如何判定可复用
 
-代码中为以下阶段建立了 Span 或指标：
+文件 Fingerprint 是下列四段以 `NUL` 分隔后做 SHA-256：
 
-- Diff 解析；
-- 文件调度；
-- Plan；
-- Main Loop；
-- LLM Request；
-- Tool Call；
-- Re-location；
-- Review Filter；
-- 评论数量；
-- Token 和 Cache Token；
-- 文件级失败与警告。
+```text
+Review Mode + Old Path + New Path + 原始 Diff 文本
+```
 
-这些数据可用于定位慢请求、模型故障、工具错误和成本异常。
+实现位于 `internal/agent/agent.go:509-511`。恢复前先校验 Review Mode 和对应 Diff 范围（range 的 from/to、commit 的 commit）；不兼容就拒绝加载。随后只把旧 JSONL 的 `review_item_done` 和 `review_item_reused` 建入 fingerprint 索引，`review_item_failed` 不可复用（`internal/session/resume.go:67-95,114-161`；`internal/session/persist_test.go:274-344`）。
+
+最小场景：首次审查 `a.go` 成功、`b.go` 因 API 错误失败；第二次用该 Session 恢复，若 `a.go` 的四段输入相同，就把旧评论放回 Collector，在新 Session 写一条带 `sourceSessionId` 的 `review_item_reused`；`b.go` 因无成功索引项重新走 Plan/Main。若 `a.go` 的路径或 Diff 改变，fingerprint miss，也重新审查（`internal/agent/agent.go:453-500`）。
+
+这个键**不包含模型、规则文件、Prompt 模板、背景说明、工具配置或 OCR 版本**。测试明确允许旧 Anthropic 模型结果被新 OpenAI 模型运行复用（`internal/agent/agent_test.go:446-485`）。所以“代码没变”只说明代码侧命中：模型或规则改变时仍会复用旧评论，不会自动失效。需要让新策略重新判断时，应不使用该 Resume Session（或另起一次完整 Review），而不能把 Fingerprint 当成语义缓存键。
+
+### 14.3 Telemetry 给谁看、发送到哪里
+
+Telemetry 面向运行者、CI/平台维护者和接收 OTLP 的可观测系统，用于回答“哪一阶段慢、哪类请求失败、调用了多少工具、消耗多少 Token”。它默认关闭，只有 `OCR_ENABLE_TELEMETRY=1` 才初始化；默认 exporter 是本地 console，配置 `OCR_OTLP_ENDPOINT` 后改用 OTLP，并可通过 `OCR_OTLP_PROTOCOL` 选 `grpc` 或 `http`。CLI 退出时最多用 5 秒 shutdown（`internal/telemetry/config.go:11-50`；`internal/telemetry/provider.go:19-68`；`cmd/opencodereview/main.go:15-27`）。
+
+开启后，代码建立 Review/Diff/Plan/Main/LLM/Tool/Re-location/Filter 等 Span，并记录 Review 时长、文件数、评论数、LLM 请求次数/耗时/总 Token、工具调用次数/耗时与错误事件；指标 API 在未启用或记录失败时直接返回，不让观测故障中断 Review，属于 best-effort（`internal/telemetry/metrics.go:16-208`；`internal/telemetry/events.go:13-45`；`internal/telemetry/span.go:10-75`）。属性会包含模型名、工具名、错误、文件路径、仓库目录等元数据，配置外部 OTLP 前仍需评估隐私。
+
+`OCR_TELEMETRY_LOG_CONTENT` 虽被配置层解析并保存在 Provider，但当前源码没有调用 `ContentLogging()` 来把 Prompt/Response 内容写入 Telemetry；因此不能承诺打开它就会导出正文（`internal/telemetry/config.go:23-48`；`internal/telemetry/provider.go:69-81`）。反过来，关闭此开关也不会阻止前述 Session JSONL 保存正文。Token 指标同样只接受 Provider Usage 的 `TotalTokens`；供应商不返回 Usage 时该次 Telemetry Token 为 0，不能据此断言请求没有成本（例如 `internal/agent/agent.go:901-923`）。
 
 ---
 
@@ -1070,6 +1073,11 @@ OpenCodeReview 的核心价值不只是“用 LLM 看 Diff”，而是用工程�
 | Comment 异步定位 | `internal/llmloop/loop.go:333` |
 | Comment WorkerPool | `internal/llmloop/pool.go:24` |
 | 上下文压缩 | `internal/llmloop/compression.go` |
+| Session 内存模型与 Token 记录 | `internal/session/history.go` |
+| Session JSONL 持久化 | `internal/session/persist.go` |
+| Resume 加载与兼容校验 | `internal/session/resume.go` |
+| Telemetry 配置与 Provider | `internal/telemetry/config.go`、`provider.go` |
+| Telemetry 指标与事件 | `internal/telemetry/metrics.go`、`events.go` |
 | 工具 Schema | `internal/config/toolsconfig/tools.json` |
 | Prompt | `internal/config/template/prompts/` |
 | Rule Resolver | `internal/config/rules/system_rules.go:252` |
@@ -1078,4 +1086,4 @@ OpenCodeReview 的核心价值不只是“用 LLM 看 Diff”，而是用工程�
 
 ## 20. 验证说明
 
-本报告基于 Commit `3355baea0e83b3be7653e6f422c83242541f77c0` 的实际源码调用链整理，不仅依据 README。分析时源码仓库状态干净并与 `origin/main` 对齐。本轮逐项交叉阅读了 `internal/tool`、`internal/diff`、`internal/llmloop`、`internal/agent` 及对应 Go 测试，并实际运行 `npm run test:github-actions`：评论发布与翻译同步两组 JavaScript 测试全部通过。当前分析环境未安装 Go，无法执行 `go test ./...`（`go: command not found`），因此 Go 侧结论来自只读源码与测试用例交叉核对，而非本机执行结果。
+本报告基于 Commit `3355baea0e83b3be7653e6f422c83242541f77c0` 的实际源码调用链整理，不仅依据 README。分析时源码仓库状态干净并与 `origin/main` 对齐。本轮逐项交叉阅读了 `internal/tool`、`internal/diff`、`internal/llmloop`、`internal/agent`、`internal/session`、`internal/telemetry` 及对应 Go 测试，并实际运行 `npm run test:github-actions`：评论发布与翻译同步两组 JavaScript 测试全部通过。当前分析环境未安装 Go，无法执行 `go test ./...`（`go: command not found`），因此 Go 侧结论来自只读源码与测试用例交叉核对，而非本机执行结果。
