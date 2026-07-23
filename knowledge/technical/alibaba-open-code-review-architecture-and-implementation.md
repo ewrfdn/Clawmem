@@ -169,7 +169,16 @@ git diff <merge-base> <to>
 
 这比直接比较 `<from>..<to>` 更符合 PR Review 语义，因为它只关注来源分支从共同祖先开始引入的变化。
 
-Commit 模式对 Merge Commit 使用 `--diff-merges=first-parent`，避免普通 `git show` 产生解析器不支持的 combined diff（`diff --cc`）。
+> **初学者可能会问：merge-base 到底解决了什么问题？** 设主分支和功能分支都从提交 `B`
+> 分叉：主分支后来到 `M`（`from`），功能分支后来到 `F`（`to`）。`merge-base M F` 得到双方最近的
+> 共同祖先 `B`，再比较 `B → F`，结果只包含功能分支自己的改动。若直接比较 `M → F`，主分支
+> `B → M` 的变化也会以“反向差异”混进审查。实现会缓存 merge-base；找不到共同祖先时明确报错，
+> 不会退化成含义不确定的比较（`internal/diff/git.go:100-123,259-265`）。
+
+Commit 模式对 Merge Commit 使用 `--diff-merges=first-parent`，即把 Merge Commit 与第一父提交比较，
+避免普通 `git show` 产生解析器不支持的 combined diff（`diff --cc`）。这回答了“一个 Merge Commit
+有两个父提交时以谁为旧版本”：OCR 明确采用第一父提交，而不是把两个方向揉成一份 Diff
+（`internal/diff/git.go:125-134`；`internal/diff/git_test.go:477`）。
 
 Workspace 模式优先使用：
 
@@ -201,6 +210,25 @@ git diff --staged
 
 ## 3. Diff 获取、解析与完整文件上下文
 
+**Unified Diff（统一差异格式）** 是把文件变化编码为普通文本的约定。最小例子如下：
+
+```diff
+--- a/app.go
++++ b/app.go
+@@ -10,3 +10,3 @@
+ keep()
+-oldCall()
++newCall()
+ return
+```
+
+`---`/`+++` 指向旧文件和新文件；`-` 是删除行，`+` 是新增行，行首空格是未改动的上下文。
+`@@ -10,3 +10,3 @@` 开始一个 **Hunk（变更块）**：旧侧从第 10 行取 3 行，新侧也从第 10 行
+取 3 行。一个文件可有多个相距很远的 Hunk。OCR 另有 `ParseHunks()` 将 Hunk 头解析成
+`OldStart/OldCount/NewStart/NewCount`，并把内容行分类为 Context/Added/Deleted；文件头和
+`\ No newline at end of file` 元数据不当作代码（`internal/diff/hunk.go:9-37,42-109`；
+`internal/diff/hunk_test.go:7-108`）。
+
 ### 3.1 安全、稳定的 Git 调用
 
 Git 命令统一使用以下约束：
@@ -221,6 +249,11 @@ const DiffContextLines = 3
 
 位置：`internal/diff/git.go:17-18`。
 
+这里的“上下文三行”不是只允许审查变更前后三行，而是 Git 在每个变更块两侧各附带最多三行
+未改代码，帮助解析器和模型定位；相邻变化足够近时会合并成一个 Hunk。限制 Diff 体积可以节省
+Prompt Token，但局部片段未必能说明函数、类型或调用链，因此 OCR 还保留变更后完整文件内容，
+两者用途不同。
+
 ### 3.2 文件级 Diff 解析
 
 `internal/diff/parser.go:25` 的 `ParseDiffText()` 将 Unified Diff 转换为 `model.Diff`，主要记录：
@@ -233,6 +266,24 @@ const DiffContextLines = 3
 
 解析器通过 `@@` 标记维护 `inHunk` 状态，仅在 Hunk 内统计 `+` 和 `-`，避免把 `--- a/file`、`+++ b/file` 误判为删除和新增代码。
 
+特殊文件状态的处理不是依赖扩展名猜测，而是读取 Git Diff 元数据：
+
+- 新文件的旧路径是 `/dev/null`，删除文件的新路径是 `/dev/null`；删除文件不再读取不存在的
+  新版本，也不会派发逐文件 LLM 子任务（`internal/diff/parser.go:65-103,112-115`；
+  `internal/agent/agent.go:350-378`；`internal/diff/parser_test.go:70-131`）。
+- `--find-renames` 让 Git 发出 `rename from` / `rename to`；解析器保留旧、新路径并设置
+  `IsRenamed`，后续以**新路径**读取内容、应用过滤和命中 Rule。即使 100% 相似的纯重命名没有
+  Hunk，也仍可识别（`internal/diff/parser.go:82-95`；`internal/diff/parser_test.go:8-68`；
+  `internal/diff/git_test.go:381-443`）。
+- Git 对二进制变更发出行首为 `Binary files ... differ` 的标记；解析器设置 `IsBinary`，Agent
+  随后首先排除它。正则锚定行首，所以文本 Hunk 中新增一句 `Binary files ...` 不会误伤
+  （`internal/diff/parser.go:17-23,74-76`；`internal/agent/preview.go:31-34`；
+  `internal/diff/parser_test.go:133-170`）。
+- Workspace 的未跟踪文件被合成为“`/dev/null → 新路径`”的新文件 Diff，全部内容都以 `+`
+  开头，而不是仅保留 `-U3`；空文件的 Hunk 行数为 0。文件读取失败会跳过，且读取函数会阻止
+  绝对路径、目录、路径穿越和指向仓库外的父级符号链接（`internal/diff/git.go:283-318`；
+  `internal/diff/workspace_file.go:11-59`；`internal/diff/workspace_file_test.go:10-134`）。
+
 对于 Commit/Range 模式，变更后的完整文件内容通过以下命令读取：
 
 ```bash
@@ -241,7 +292,12 @@ git show <ref>:<path>
 
 而不是读取当前工作区，因此审查内容始终与目标 Ref 一致。Workspace 模式则读取磁盘上的当前文件。
 
-这项设计很重要：三行 Diff 上下文适合控制 Token，却不足以理解完整函数；完整文件内容可供 `file_read` 和评论行号回退定位使用。
+这里有两条相互独立但保持同一版本的完整上下文通道：Parser 把目标版本内容写入
+`Diff.NewFileContent`，而 `file_read` 工具按需读取整个文件或指定行窗口；Commit 使用 commit，Range
+使用 `to`，Workspace 使用磁盘。删除文件没有新内容；读取失败只打印警告并留下空内容，而不是让
+整份 Diff 解析失败（`internal/model/diff.go:3-15`；`internal/diff/parser.go:105-141`；
+`internal/tool/filereader.go:18-77,115-146`）。这项设计很重要：三行上下文适合控制 Token，却不足以
+理解完整函数；完整内容还能供评论行号从 Hunk 定位失败时回退搜索（`internal/diff/resolver_test.go:92-229`）。
 
 ---
 
@@ -259,16 +315,33 @@ vendor/  node_modules/  target/
 .cachefile/  _packages/  rpm/  pkgs/ ...
 ```
 
-同时读取项目根目录 `.gitignore`。这里的 `.gitignore` 匹配是轻量实现，并非完整复刻 Git 的所有语义。
+这些是**仓库根相对路径前缀**；Provider 解析 Diff 后以新路径过滤，删除文件则改用旧路径
+（`internal/diff/git.go:241-255`）。同时读取项目根目录 `.gitignore`，忽略空行和注释。这里的
+`.gitignore` 匹配是轻量实现，并非完整复刻 Git 的所有语义：尾随 `/` 按任意同名路径段匹配，
+不含 `/` 的模式匹配 basename，含 `/` 的模式用 `filepath.Match` 匹配完整相对路径并尝试字面后缀；
+`!` 否定规则被直接忽略，因此不能用它重新纳入先前排除的文件（`internal/diff/git.go:168-239`；
+`internal/diff/gitignore_test.go:32-109`）。Workspace 枚举未跟踪文件时，Git 自己先通过
+`git ls-files --others --exclude-standard` 应用标准忽略规则，Provider 再做上述过滤
+（`internal/diff/git.go:321-337`）。
+
+> **为什么还需要下一层过滤？** Provider 层处理的是“根本不进入解析结果”的仓库目录和
+> `.gitignore` 噪声；它不知道哪些语言值得交给模型，也不负责用户 Review 偏好。职责不同，不能把
+> 两层笼统理解为同一份 ignore 列表。
 
 ### 4.2 Agent 层过滤
 
-`internal/agent/agent.go:837` 再根据以下条件过滤：
+Agent 的判定顺序是：二进制 → 用户 `exclude` → 命中的用户 `include` → 支持的扩展名 → 默认路径
+规则（`internal/agent/preview.go:29-56`；`internal/agent/preview_test.go:10-405`）。因此：
 
-- 二进制文件；
-- 默认路径/扩展名规则；
-- 用户 `include`/`exclude`；
-- CLI 追加的 excludes。
+- `exclude` 优先于 `include`，同一文件二者都命中时仍排除；
+- `include` 是“显式放行”而非“唯一白名单”：命中时可绕过扩展名和默认路径排除，未命中仍继续
+  常规检查，并不会仅因存在 include 就被排除；
+- 重命名按新路径匹配；删除文件以旧路径作为有效路径；
+- 二进制一定先排除。
+
+Rule 配置中的 include/exclude 也不是把所有层简单拼接：只采用第一个实际配置过滤条件的高优先级
+层，顺序为 CLI `--rule` 文件、项目规则、全局规则（`internal/config/rules/system_rules.go:237-310`）。
+Agent 最终在 `internal/agent/agent.go:832-859` 应用这些结果。
 
 纯删除文件不会进入正常逐文件审查，因为 Prompt 主要关注新加入或修改后的代码。
 
@@ -287,6 +360,9 @@ internal/agent/agent.go:202-205
 ```
 
 因此某个文件即使不直接进入 Review，模型仍可通过 `file_read_diff` 查看其变化，以确认跨文件修改是否配套。
+这里的“所有”是 **Provider 过滤后、Agent 过滤前** 的全部 Diff：已被固定目录或 `.gitignore`
+挡在 Provider 层的文件不会进入 DiffMap；纯删除文件的 `NewPath` 是 `/dev/null`，也不会写入该 Map
+（`internal/agent/agent.go:302-345`）。
 
 ---
 
@@ -328,6 +404,29 @@ CLI --rule 指定的规则
 - `merge_system_rule` 合并用户规则与系统规则。
 
 默认情况下，用户规则会替换系统规则；设置 `merge_system_rule: true` 后，两类规则会带清晰标题一起注入 Prompt。
+
+**Rule Resolver（规则解析器）** 的输入是一个文件路径，输出是最终注入该文件 Prompt 的规则文本。
+实际逐文件审查把新路径转为小写后调用它；没有 Resolver 时返回空规则
+（`internal/agent/agent.go:534-540,782-789`）。命中过程可拆成两级：
+
+1. 按 `--rule` → 项目 → 全局 → 内置系统规则逐层查找；每层内部都按声明顺序查找，**第一个匹配
+   即停止**。因此 `internal/**/*.go` 若写在更具体的 `internal/config/**/*.go` 前面，后者永远不会
+   命中同一个文件（`internal/config/rules/system_rules.go:237-249,369-447`；
+   `internal/config/rules/system_rules_test.go:130-150,273-301`）。
+2. 系统规则同样 first-match-wins；没有路径规则命中才回退 `default_rule`。它使用
+   `doublestar.Match` 支持 `**`，先把 `*.{go,py}` 展开成两个模式，并做大小写不敏感匹配
+   （`internal/config/rules/system_rules.go:123-177`；`internal/config/rules/system_rules_test.go:10-211`）。
+
+内置 `path_rule_map` 是 JSON 对象，而 Go 普通 map 不保证迭代顺序；实现用流式 JSON Decoder 把键
+读入有序 `[]PathRule`，否则“第一个匹配”会随机化。默认配置也刻意把更具体的 GitHub Workflow
+YAML 规则放在通用 YAML 规则之前（`internal/config/rules/system_rules.go:20-80`；
+`internal/config/rules/system_rules.json:3-25`）。例如 `.github/workflows/ci.yml` 先命中
+`.github/workflows/**/*.{yaml,yml}`，不会落入后面的 `**/*.{yaml,yml}`。
+
+用户规则的 `rule` 既可直接写文本，也可写 `.md`、`.txt`、`.markdown` 文件路径；相对路径以相应
+规则文件所在目录（项目规则以仓库根）解析。读取时限制扩展名和 512 KiB，检查路径穿越并解析
+符号链接；不可安全读取时清空该条规则并警告（`internal/config/rules/system_rules.go:334-365,450-557`；
+`internal/config/rules/system_rules_test.go:972-1358`）。
 
 这一机制让 Review 从“通用大模型判断”变成“按语言、目录、业务模块定制的审查”。
 
@@ -419,50 +518,65 @@ Plan Prompt 要求输出结构化 JSON，包括：
 }
 ```
 
-Plan 阶段只制定计划，不真正执行工具。结果作为 `{{plan_guidance}}` 注入 Main Task。
+Plan 阶段只制定计划，不真正执行工具。这里容易产生一个误解：Plan Prompt 虽然会把可用工具的名称、说明和参数格式化为文本，但 `executePlanPhase()` 发出的 `ChatRequest` 并没有携带 `Tools` 字段，所以 Plan 只能建议 Main 稍后调用什么工具，不能在这一阶段读取文件或搜索代码。它的文本结果随后作为 `{{plan_guidance}}` 注入 Main Task；没有结果时，连同空的“Review Plan”标题一起移除。实现见 `internal/agent/agent.go:876-925` 和 `internal/agent/agent.go:568-589`。
 
-当改动行数低于配置的 `plan_mode_line_threshold` 时可跳过 Plan，以节省一次 LLM 请求。Plan 调用失败也不会中止 Review，而是记录警告并继续 Main Task。
+默认情况下，改动少于 `PLAN_MODE_LINE_THRESHOLD=50` 行时跳过 Plan，以省下一次 LLM 请求；Plan 调用失败也不会中止 Review，而是记录事件并让 Main 在没有计划的情况下继续（`internal/agent/agent.go:541-560`）。因此两阶段的分工是：
+
+- **Plan（先想路线）**：一次性阅读 Diff，输出结构化风险清单和调查建议；不执行工具、不产出最终评论。
+- **Main（沿路线查证）**：拿到 Diff、可选计划和真正可调用的工具，多轮读取真实仓库，确认问题并提交评论。
+
+为什么不把它们合成一次调用？小改动确实可以直接进入 Main；但对较大改动，先规划能让后续有限的工具预算优先查高风险路径。更重要的是，即使有 Plan，Main 仍不能只调用一次 LLM：初始 Prompt 只有 Diff 和元数据，不一定含完整函数、调用方或配置定义；模型需要“先决定读什么，再看到读取结果，再据此决定下一步”，后一个决定依赖前一个结果，天然是串行反馈循环。
 
 ---
 
 ## 8. Main Task：LLM 工具调用循环
 
-主循环实现于：
+主循环实现于 `internal/llmloop/loop.go:143-268` 的 `RunPerFile()`。这里的 **Tool Call（工具调用）** 是模型返回的一段结构化请求，包含工具名和 JSON 参数；它不是模型自己访问磁盘。OCR 进程收到请求后才在本地执行工具，再把结果作为 `role=tool` 消息交回模型。
+
+首次请求的 System/User 消息由模板渲染而来，包含当前文件路径与 Diff、其他变更文件列表、当前时间、需求背景、匹配到的 Review Checklist，以及可选 Plan Guidance（`internal/agent/agent.go:568-590`）。请求还单独携带 Main 可用工具的 JSON Schema；后续请求则再带上此前完整会话历史和工具结果（`internal/llmloop/loop.go:169-180`）。
+
+### 8.1 为什么模型能读到“真实代码”
+
+模型不会直接打开仓库，也不能仅凭 Tool Schema 读文件。工具链分为两个必须同时存在的部分：
+
+1. **Tool Definition / JSON Schema** 告诉模型“可以调用什么、参数怎么写”，主要来自 `internal/config/toolsconfig/tools.json`；
+2. **Provider** 是 OCR 本地进程中的实际执行器，实现 `Execute(ctx, args)`，可以在配置的仓库目录中读文件、搜索代码或收集评论；Provider 保存在 `tool.Registry`（`internal/tool/definitions.go:66-103`）。
+
+Agent 启动时注册内置 Provider，MCP Provider 也在此时动态加入；DiffMap 注入完成后 Registry 被 `Freeze()`，运行期只读，避免并发审查时改变工具映射（`cmd/opencodereview/review_cmd.go:315-322`、`internal/agent/agent.go:202-205`）。循环执行每个 Tool Call 时按名称查 Registry、解析 JSON 参数并调用 Provider；未知名称、参数错误和执行错误都会转换成文本结果返回模型，而不是让模型“假装成功”（`internal/llmloop/loop.go:274-329`、`411-429`）。
+
+### 8.2 一轮最小消息—工具往返
+
+以下示例省略了真实 Prompt 的大段文字，但保留协议角色和因果关系：
 
 ```text
-internal/llmloop/loop.go:143
-RunPerFile()
+第 1 次 LLM 请求
+  system: 你是代码审查 Agent；上下文不足时先用工具……
+  user:   当前文件 cache.go；这里是 Diff……
+  tools:  file_read(file_path, start_line, end_line), code_comment(...), task_done(state)
+
+第 1 次 LLM 响应
+  assistant.tool_calls:
+    [{id:"call_1", name:"file_read",
+      arguments:{"file_path":"cache.go","start_line":80,"end_line":140}}]
+
+OCR 本地执行
+  Registry["file_read"].Execute(...) -> 返回第 80～140 行真实文件内容
+
+第 2 次 LLM 请求
+  system:  ...原消息...
+  user:    ...原 Diff...
+  assistant.tool_calls: ...call_1...
+  tool (tool_call_id="call_1"): "80: func load(...) ..."
+  tools:   ...同一组定义...
+
+第 2 次 LLM 响应
+  assistant.tool_calls:
+    [{id:"call_2", name:"code_comment", arguments:{...}}]
 ```
 
-每次 LLM 请求包含：
+关键点是 `call_1` 的结果会由 `NewToolResultMessage()` 追加到 `messages`，下一次 `CompletionsWithCtx()` 又发送整个 `messages` 列表（`internal/llmloop/loop.go:456-464`）。因此模型第二轮不是凭空记住结果，而是 API 请求显式带回了结果。提交评论后模型还可以继续搜索；确认已充分检查且没有更多问题时，才调用 `task_done`。
 
-- 当前文件路径；
-- 当前文件 Diff；
-- 其他已变更文件列表；
-- 当前时间；
-- Requirement Background；
-- 当前文件匹配到的 Review Checklist；
-- 可选 Plan Guidance；
-- 当前会话历史和前几轮工具结果；
-- 可用工具定义。
-
-循环过程：
-
-```text
-发送消息和工具定义给 LLM
-        ↓
-解析 Tool Calls
-        ↓
-执行每个工具并把结果加入会话
-        ↓
-模型继续分析或生成评论
-        ↓
-模型显式调用 task_done 后结束
-```
-
-如果模型没有产生工具调用，OCR 会追加纠正提示，要求模型重试或调用 `task_done`。连续三轮没有有效工具结果，或达到最大工具请求次数后停止，避免死循环。
-
-### 8.1 内置工具
+### 8.3 内置工具
 
 工具定义主要位于 `internal/config/toolsconfig/tools.json`。
 
@@ -503,11 +617,31 @@ RunPerFile()
 
 #### `task_done`
 
-模型显式声明当前文件审查完成。
+模型显式声明当前文件已经审查完毕。它是 Main 的**正常成功终止协议**，不是普通文本答案：`executeToolCall()` 直接把它转换为 Completed checkpoint，`RunPerFile()` 只有看到该 checkpoint 才返回 `true`（`internal/llmloop/loop.go:309-311`、`218-245`）。可以先调用零到多个 `code_comment`，最后再调用 `task_done`；没有问题时也应直接调用它。
 
-### 8.2 MCP 扩展
+Schema 要求 `state` 为 `DONE` 或 `FAILED`，但当前执行器识别到工具名后，在解析参数之前就直接 `Complete()`，并未读取 `state`。也就是说，从当前实现看，`task_done({"state":"FAILED"})` 仍会被计作成功完成；判断真实终态应以代码路径而非 Schema 文案为准。这是工具契约与执行语义之间值得注意的不一致（`internal/config/toolsconfig/tools.json` 的 `task_done` 定义；`internal/llmloop/loop.go:309-311`）。
 
-CLI 会初始化配置中的 MCP Client，将 MCP Tool Definitions 追加到 Plan 和 Main 阶段。因此 OCR 的 Agent 能力并不局限于内置源码工具，可按配置接入额外静态分析、知识库或组织内部服务。
+### 8.4 正常完成与保护性停止不是一回事
+
+循环还有多层保险，避免模型或外部服务让单文件永远运行：
+
+- **本轮没有 Tool Call**：追加一条 User 纠正消息，请模型重试或在完成时调用 `task_done`，然后进入下一次 LLM 请求（`internal/llmloop/loop.go:205-211`）。这类轮次会消耗工具请求预算，但不计入“连续空工具结果”计数。
+- **有 Tool Call，但没有任何非空有效结果**：把错误文本作为 Tool Result 回传；连续 3 轮仍为空则停止（`internal/llmloop/loop.go:214-255`）。注意执行错误通常本身是非空错误文本，因此会让模型有机会纠正参数。
+- **达到调用预算**：每次发 LLM 请求前预算减一，默认 `MAX_TOOL_REQUEST_TIMES=30`；耗尽后返回 `false`，不是成功完成（`internal/llmloop/loop.go:150-168`、`264-267`，默认值见 `internal/config/template/task_template.json`）。
+- **上下文仍过长**：80% 阈值处同步压缩；压缩后仍超限则停止，详见第 13 节。
+- **LLM 请求报错或 Context 被取消**：立即返回 error；单文件调度 Context 默认由 CLI 的 `--timeout 10` 分钟限制，超时只使该文件失败，其他并发文件继续（`internal/agent/agent.go:372-420`、`cmd/opencodereview/flags.go:134`）。底层 LLM Client 还可有独立 HTTP 请求超时。
+
+`task_template.json` 虽然为 Main、Plan、Memory Compression 声明了 120、180、120 秒的 `timeout` 字段，但当前这三条执行路径没有用这些字段创建子 Context；不能把它们误解为当前生效的阶段级硬超时。当前明确使用任务模板 Timeout 的是 Review Filter 和 Re-location，而 Plan/Main/压缩主要受上层单文件 Context 与 LLM Client 请求超时约束（用法对照 `internal/agent/agent.go:668-683`、`internal/diff/relocation.go:33-35`）。
+
+所有“未显式 `task_done`”的停止最终都会让 `executeSubtask()` 得到 `mainCompleted=false`，文件被记录为 `main_task did not complete before stopping`；这能防止被迫截断被伪装为成功（`internal/agent/agent.go:606-635`）。
+
+### 8.5 MCP 扩展
+
+**MCP（Model Context Protocol，模型上下文协议）** 是外部进程向 Agent 统一暴露工具定义和调用接口的协议，不是另一种 Prompt，也不是把仓库自动上传给模型。OCR 按配置以 stdio 启动 MCP Server 子进程，完成 `Connect` 和 `ListTools`，把每个外部工具适配为同一个 `tool.Provider`；实际调用时再经 `CallTool` 把 JSON 参数发给该进程并取回文本结果（`internal/mcp/client.go:13-82`、`internal/mcp/provider.go:13-25`）。
+
+成功发现且注册的 MCP Tool Definition 会同时追加到 Plan 和 Main：Plan 只看到其说明，用来规划；Main 才能产生真实 Tool Call。可配置 allowlist；与内置保留名或已注册工具重名时会告警并跳过，外部工具不能覆盖 `file_read`、`task_done` 等内置行为（`internal/mcp/provider.go:27-64`、`94-114`，`cmd/opencodereview/review_cmd.go:97-99`）。
+
+初始化单个 MCP Server 的 Connect/ListTools 有 30 秒 Context；可选 setup 最多 5 分钟。setup 或启动失败通常只是告警并跳过该 Server，Review 继续使用其余工具（`cmd/opencodereview/review_cmd.go:263-311`）。因此 MCP 扩展了 OCR 可查证的世界，例如静态分析、知识库或内部服务，但其结果和内置工具一样，仍必须作为 Tool Result 进入下一轮，模型才看得到。
 
 ---
 
@@ -647,18 +781,42 @@ executeReviewFilter()
 
 ---
 
-## 13. 上下文和 Token 管理
+## 13. 上下文压缩、Token 与缓存统计
 
-多轮工具调用会不断扩大消息历史。OCR 在 `internal/llmloop/compression.go` 和 `internal/llmloop/loop.go:432` 实现分区上下文压缩。
+**Token** 是模型计费和上下文容量使用的文本单位，不等同于字符或单词。多轮工具调用会反复携带原 Prompt、Assistant Tool Calls 和 Tool Results，历史越长，每次请求的输入越大。OCR 因此在 `internal/llmloop/compression.go` 和 `internal/llmloop/loop.go:432-484` 实现三分区压缩。
 
-总体策略：
+### 13.1 三个分区怎样压缩
 
-- 约 60% 上下文占用时，尝试异步压缩旧消息；
-- 接近 80% 时，强制同步压缩；
-- 若压缩后仍超过警戒线，停止当前文件循环；
-- 初始 Diff 本身超过 80% 时，在进入循环前跳过该文件。
+消息被按完整的“一个 Assistant 消息 + 紧随其后的所有 Tool Result”组成 **round（轮次）**，避免留下没有对应结果的半个 Tool Call。然后分为：
 
-压缩状态归属于单文件会话，文件结束时会取消仍在运行的压缩任务，避免跨文件污染。
+1. **Frozen Zone**：最前面的两条 System/User 初始消息，始终保留；
+2. **Compress Zone**：较老的完整轮次，交给独立的 Memory Compression LLM 请求生成摘要；
+3. **Active Zone**：在预算内能容纳的最近若干完整轮次，逐字保留。
+
+重建后的历史是“前两条初始消息（摘要附加到第 2 条 User 消息）+ 最近活跃轮次”，实现见 `internal/llmloop/compression.go:74-153`、`205-270`。
+
+阈值策略为：
+
+- 超过 `MAX_TOKENS` 的 60% 但尚未到 80%：基于当前消息快照启动异步后台压缩，尽量不阻塞主循环；
+- 达到 80%：取消待处理后台任务并立即同步压缩；
+- 同步压缩后仍达到 80%：`addNextMessage()` 返回 `false`，当前文件保护性停止，不能算 `task_done` 成功；
+- 调度前若单个 Diff 自身的估算 Token 已超过 80%，先过滤该文件；若全部被过滤，Review 返回 `all diffs filtered out by token size`。即使 Diff 没超限，渲染后的 Main Prompt（还包含规则、计划等）超过 80% 也会在进入 Tool Loop 前跳过该文件（`internal/agent/agent.go:357-361`、`592-603`）。
+
+压缩状态归属于单文件会话而非共享 Runner；文件结束时取消仍在运行的任务，避免并发文件互相应用或取消摘要（`internal/llmloop/compression.go:45-61`、`273-287`）。
+
+### 13.2 压缩会丢掉什么
+
+压缩是有损的：老 Tool Result 的逐字代码、精确行号、搜索结果顺序、失败参数和中间推理不会原样保留，只剩压缩模型认为重要的事实。因此摘要可能漏掉细节或引入概括偏差。OCR 的缓解方式是保留初始 Prompt 和最近完整轮次，并要求按完整 round 切割；但如果后续判断必须依赖旧结果的原文，模型可能需要再次调用工具。
+
+失败时不会用空摘要替换历史：压缩请求报错或返回空内容都会保留原消息，防止为了降 Token 直接丢失全部上下文（`internal/llmloop/compression.go:237-256`）。代价是历史可能仍在 80% 以上，重试压缩后仍无法降下去就停止该文件。
+
+### 13.3 估算 Token 与 API Usage 不是同一个数
+
+阈值判断使用本地 tokenizer 对每条消息的文本做粗略估算；默认按 `cl100k_base`，`o1/o3/o4` 模型名使用 `o200k_base`，加载失败时退化为“字节数 / 4”（`internal/llm/client.go:260-288`、`internal/llmloop/compression.go:63-71`）。这个估算没有完整计算 API 包装和 Tool Schema 开销，所以是保护性近似值，不应当成账单。
+
+运行统计则取自每次 LLM 响应的 `usage`：分别累计 Input/Prompt、Output/Completion、Cache Read 和 Cache Write Token；Main、Plan、压缩、重定位和过滤等 OCR 自己发出的模型请求都会在相应路径计入 Runner（例如 `internal/llmloop/loop.go:190-197`、`compression.go:244-250`、`internal/agent/agent.go:916-923`）。若 Provider 没返回 usage，OCR 无法凭本地估算补齐真实计费统计。
+
+这里的 **Cache Read/Write Token** 是 LLM Provider 在响应 Usage 中报告的 Prompt Cache 指标。OCR 只是兼容解析 Anthropic、OpenAI Responses 及部分代理的字段并累加（`internal/llm/usage_resolver.go:35-60`）；它不表示 OCR 缓存了模型答案，也不同于第 14 节基于 Fingerprint 的 Resume 结果复用。不同 Provider 对 Cache Token 是否已包含在 Prompt/Total Token 中定义不同，`resolveUsage()` 只在缺少 Total 时按来源语义回算，以避免 OpenAI 风格缓存 Token 被重复相加（`internal/llm/usage_resolver.go:71-108`）。
 
 ---
 
