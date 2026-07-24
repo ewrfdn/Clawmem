@@ -867,57 +867,83 @@ Telemetry 面向运行者、CI/平台维护者和接收 OTLP 的可观测系统�
 
 ## 15. GitHub Action 发布流程
 
-GitHub Action 定义于 `action.yml`。
+GitHub Action 是仓库中可复用的复合 Action，入口为 `action.yml`。先定义两个容易混淆的 PR 术语：**Base** 是 PR 准备合入的目标分支（例如 `main`），**Head** 是贡献者提交所在分支的最新 Commit；**Merge Base** 是 Base 与 Head 最近的共同祖先。审查 `Merge Base..Head`，关注的正是这个 PR 相对共同起点引入的改动，而不是 Base 后续新增但 PR 尚未合并的变化。
 
-PR 场景下，它不会直接 Checkout 不可信的 PR Head，而是：
+### 15.1 为什么取 Head 的对象，却不 Checkout Head
 
-1. Checkout 可信 Base；
-2. 单独 Fetch PR Head 的 Git Objects；
-3. 计算 Merge Base；
-4. 执行 JSON 格式 Review：
+仓库示例使用 `pull_request_target`，因为它在目标仓库的 Base 上下文运行，可读取 LLM Secret，并给 `GITHUB_TOKEN` 写 PR 评论的能力。这个触发器权限较高，所以关键安全边界是：工作流和 Action 来自可信 Base，工作树也 Checkout Base；随后只用 `git fetch origin "pull/<PR>/head"` 取得 Head 的 Git Objects，让 `ocr` 能读取 Blob 和 Diff，但**不把 Head 物化为当前工作树，更不运行其中的脚本、构建步骤或安装清单**。因此恶意 PR 不能仅靠修改自身 workflow、`package.json` 等文件让本次高权限 Job 执行这些改动（`.github/workflows/ocr-review.yml:24-49`；`action.yml:167-207`）。
+
+这不是“PR 内容完全可信”或“绝对安全”：Head 的源码和 Diff 仍会被解析并发送给配置的 LLM，可能包含敏感内容或提示注入文本；`ocr`、外部 Action 与 LLM 服务本身仍属于供应链/出站信任面。`ocr_version` 默认还是 `latest`，示例远程 Action 使用 `@main`，生产环境若重视可复现性，应固定经过审核的版本或 Commit。若自行扩展 workflow，也不能在 `pull_request_target` 下对 Head 做 Checkout 后执行测试、安装依赖或运行 PR 提供的命令（`action.yml:49-52,182-215`；`examples/github_actions/ocr-review.yml:56-68,113-119`）。此外，Base Fetch 失败被 `|| true` 忽略，Merge Base 算不出时会回退为 Head 自身；此时 `Head..Head` 很可能表现成无改动而不是显式报错，是可用性上的保守失败盲点，不应误读为“确实没有问题”（`action.yml:201-207`）。
+
+**最小权限是什么？** 示例显式给 `contents: read`（Checkout、Fetch Base/Head）和 `pull-requests: write`（读取 PR 上下文并创建 Review/Inline/PR Summary）；`github_token` 默认取 `${{ github.token }}`。LLM 凭据另外以 Secrets 传入，不应写入仓库。评论触发的重审还先限制为非 Bot 且 `MEMBER/OWNER/COLLABORATOR`，避免任意外部评论消耗 LLM 配额。权限不足时 Review 或 Summary API 会失败，发布器不会神奇地绕过仓库/分支/组织策略（`action.yml:45-48`；`examples/github_actions/ocr-review.yml:65-68,73-93`）。
+
+### 15.2 CLI JSON 怎样变成网页上的 Inline 与 Summary
+
+Action 计算 Merge Base 后执行：
 
 ```bash
-ocr review \
-  --from "${MERGE_BASE}" \
-  --to "${HEAD_SHA}" \
-  --format json
+ocr review --from "${MERGE_BASE}" --to "${HEAD_SHA}" --format json
 ```
 
-5. 保存 `/tmp/ocr-result.json` 和 stderr；
-6. 可选上传 Artifact；
-7. 使用 `actions/github-script` 发布结果。
+stdout 保存为 `/tmp/ocr-result.json`，stderr 单独保存；非零退出码时可先上传两者为 Artifact，然后 Job 失败，不进入评论发布。成功时 `actions/github-script` 加载 `scripts/github-actions/post-review-comments.js`（`action.yml:227-305`）。CLI JSON 顶层包含 `status/message/summary/tool_calls/comments/warnings/...`；每个 `comments[]` 的输出模型包含 `path`、`content`、`start_line`、`end_line`，并可带 `existing_code`、`suggestion_code`、`category`、`severity`。发布器用路径与行号定位、用 `content` 生成正文；只有 `existing_code` 与 `suggestion_code` 同时存在时才追加 GitHub suggestion/Before-After 块，当前发布格式不展示 `category/severity`（`cmd/opencodereview/output.go:225-317`；`internal/model/review.go:3-17`；`scripts/github-actions/post-review-comments.js:1013-1044`）。
 
-发布逻辑位于：
+转换规则如下：
 
-```text
-scripts/github-actions/post-review-comments.js
-```
+1. `start_line`、`end_line` 至少一个为正，才尝试 **Inline Comment**（挂在 Files changed 的具体路径/行上）；单行发送 `line + side: RIGHT`，多行发送 `start_line + line + start_side/side: RIGHT`，并绑定当前 PR Head SHA。
+2. 两个行号都无效时，不猜位置，而把原评论和 `No line information provided` 原因放进 **Summary**（PR 会话中的普通 Issue Comment）。
+3. 有合法行号但 GitHub 因 Diff 已变化、该行不在可评论范围等返回 422 时，逐条发布仍失败，原评论及 API 错误也进入 Summary。
+4. `warnings` 和“无发现/跳过”等状态同样写进 Summary；Action 还输出 `comments_total/inline/skipped/failed` 与 `summary_comment_url`，供后续 Step 判断（`action.yml:103-118`；`scripts/github-actions/post-review-comments.js:75-165,411-466`）。
 
-发布器先按行号分流：`start_line` 或 `end_line` 至少一个为正才尝试 Inline；二者都无效的评论不会丢弃，而是以 `No line information provided` 为原因写入 Summary。单行使用 `line + side: RIGHT`；多行使用 `start_line + line + start_side/side: RIGHT`。这也是第 10 节强调“当前端到端只可靠支持新侧”的直接证据（`scripts/github-actions/post-review-comments.js:17-29,119-147`）。
+这里的 `RIGHT` 指 Diff 的新侧。因此第 10 节所述定位即使能找到旧侧删除行，当前发布层也没有构造 `LEFT` 评论；“内部保留了发现”不等于“一定能挂到 GitHub 行内”。
 
-有合法代码位置的评论先通过一次 `github.rest.pulls.createReview(...)` 批量发布。批量失败后，脚本根据错误类型、`Retry-After`、限流信息和指数退避逐条重试；最终仍失败的评论会连同 GitHub 错误原因追加到 Summary 的 `failedComments`，而不是静默消失。需要注意，Summary 写入本身也可能失败：当读取 API 不可用、无法确认是否已有 Summary 时，脚本宁可不创建可能重复的 Summary，并返回空 URL。因此“进入 Summary”是发布器的降级意图，不是外部 API 故障下的绝对交付保证（`scripts/github-actions/post-review-comments.js:189-458,557-590`）。
+### 15.3 一次 PR 运行的时序，以及失败怎样降级
 
-### 15.1 三类“去重”不要混为一谈
+以“3 条发现：A 可定位、B 无行号、C 行号已过期”为例：
 
-1. **当前批次内容处理**：普通 PR Review 不会在 Collector 或发布器中按 `path + line + content` 自动折叠。同批两条正文、路径和行号都相同的评论仍被视为两个独立发现，各自获得不同的随机 ID；只有 Scan 模式可选的 LLM Dedup 才会合并当前扫描批次的近重复发现，且失败时原样保留。
-2. **Incremental 历史重叠过滤**：只在开启 Incremental 时读取历史 Bot Inline Comments。路径必须相同；当前单行与历史单行只有行号完全相同才算重叠，单行与多行不会互相匹配；两边都是多行时才比较区间 IoU，而且必须**严格大于**阈值。默认阈值是 `0.6`，可由 `incrementalOverlapThreshold` / `incremental_overlap_threshold` 调整。命中的当前评论计入 `skipped`，历史评论不会被删除；若全部重叠，Summary 会说明没有新 Inline 可发（`scripts/github-actions/post-review-comments.js:25-29,150-165,661-718`）。
-3. **重试幂等**：每条待发评论带随机隐藏 ID，批 Review 带 run tag。5xx、408 或网络错误可能出现“服务端已成功、客户端没收到响应”，脚本先查已发布 ID 再决定是否重试；查不到确定状态时，部分路径宁可标记失败也不冒险重复发送。这解决传输不确定性，不是内容相似度去重。它也不是数学上的 exactly-once：读取历史评论有分页上限，极端情况下服务端成功的 ID 落在扫描上限之外，脚本可能误判未发布而重试（`scripts/github-actions/post-review-comments.js:53-65,119-147,246-379,902-1008`）。
+1. `pull_request_target` 在可信 Base workflow 中启动，解析 Base/Head，Checkout Base、Fetch Head Objects，计算 Merge Base。
+2. `ocr` 读取 `Merge Base..Head` 并输出 JSON；A/C 进入待发 Inline，B 进入 Summary-only 集合。
+3. 发布器先创建或找到一个 **Summary Anchor**（占位 Summary），再提交一次 `pulls.createReview` 批量发布 A/C。先放 Anchor 是为了让首次运行的 Summary 在 PR 时间线上位于 Review 之前，最终统计出来后再原地更新（`scripts/github-actions/post-review-comments.js:167-213,508-594`）。
+4. 若批量成功，A/C 都显示在代码行旁，Summary 解释 B。若批量因一条坏位置整体失败，脚本降级为逐条 `createReview`：A 成功；C 的 422 属于不可重试错误，于是 C 连同原因进入 Summary。最终 Summary 显示 Inline=1、Summary(no line)=1、Failed=1。
+5. 若 GitHub 的 Summary 读取不可用，脚本无法确认 Anchor 是否已存在时会暂缓创建；Finalize 再读仍失败则返回空 Summary URL，避免盲目制造重复。若 Summary 的创建/更新写请求本身失败，该异常仍可能使发布 Step 失败。故“失败评论会进入 Summary”是正常降级路径，不是 GitHub API 整体故障时的交付保证（`scripts/github-actions/post-review-comments.js:414-458,533-594`；`scripts/github-actions/post-review-comments.test.js:422-459,703-742`）。
 
-因此从模型到 PR 的最终状态表是：
+### 15.4 Sticky、Incremental、历史去重分别解决什么
+
+- **Sticky Summary（默认开启）**：用隐藏标记 `<!-- ocr-summary -->` 查找这个 Bot 先前的 Summary，后续运行更新同一条，而不是让每次重审都新增一条总览。关闭后每次 Run 有自己的 Summary，但同一 Run 的重试仍按 run tag 复用，解决的是“总览刷屏/时间线位置”，不控制 Inline。
+- **Incremental（默认关闭）**：重审时只追加未被历史 Bot Inline 覆盖的新位置，且不删除旧评论。它解决 synchronize/re-run 时重复轰炸同一片代码的问题。路径必须相同且历史侧为 `RIGHT`；单行只按同一行判断，单行与多行永不互相去重，多行才按行区间 IoU 严格大于阈值判断，默认阈值 `0.6`。它不比较正文，所以同一位置的新结论也可能被跳过；若历史读取失败则降级为空历史，可能重新发布。历史查询只取最新优先的最多 1,000 条，超大 PR 也可能漏掉更老覆盖（`action.yml:69-89`；`scripts/github-actions/post-review-comments.js:596-713`）。
+- **历史评论去重**在这里特指 Incremental 的“位置重叠过滤”，不要与模型当前批次去重或网络重试幂等混为一谈。普通 PR Review 不会把同批 `path + line + content` 相同的两条折叠；随机 ID 正是为了保留它们作为两个发现。只有 Scan 模式可选的 LLM Dedup 才处理当前扫描批次的近重复内容。
+
+### 15.5 重试会不会重复发评论
+
+发布器首先尝试一批 Review；失败后最多按默认 3 次重试配置逐条发送，并根据 `Retry-After`、`x-ratelimit-reset` 或指数退避等待。429/明确限流视为请求未落地，可等待后重试；5xx、408、网络断开则存在“GitHub 已创建，但客户端没收到响应”的不确定性（`scripts/github-actions/post-review-comments.js:201-405,746-813`）。
+
+为降低重复风险，批 Review 带 `runId-runAttempt` 隐藏 tag，每条 Inline 带同一 Run 内随机且稳定的隐藏 ID。遇到可能已落地的错误时，脚本先列出现有 Reviews/Review Comments：找到 ID 就计为成功，只补缺失项；逐条检查读失败时返回“未知”，宁可把该项记为失败，也不再次发送（`scripts/github-actions/post-review-comments.js:54-65,934-1008`）。
+
+但这只是 **best-effort 幂等**，不是 exactly-once：
+
+- 批量请求可能已落地，而“查询批 Review”本身最终失败时，当前实现明确降级为逐条发送全部评论，接受重复风险；
+- 幂等查询最多读取 50×100 条，ID 若落在截断之外会被误判为未发布；
+- Incremental 历史读取失败或超过 1,000 条上限，也可能漏掉旧位置；
+- Sticky 只去重 Summary，Incremental 只去重历史位置，都不能替代传输幂等。
+
+测试覆盖了批量部分落地后只补缺失项、逐条 5xx 已落地不重复、读 API 未知时停止重试、429 后恢复、422 转 Summary，以及批幂等读取失败时接受重复风险等分支（`scripts/github-actions/post-review-comments.test.js:573-668,862-1168`）。
+
+### 15.6 从模型发现到 GitHub 最终状态
+
+把发布层放回整条链路后，“内部保留评论”和“最终显示为 Inline”不是同一保证：
 
 | 阶段 | 条件 | 结果 |
 |---|---|---|
 | `ParseComments` | `comments` 缺失/为空/JSON 非法 | 本次不收集，错误 Tool Result 可回传模型 |
 | `ParseComments` | 单项非对象、缺少运行时 `path` 或 `content` | 该单项静默跳过，其他合法项继续 |
 | Resolver/Re-location | 都定位失败 | 评论保留为 `0..0` |
-| Review Filter | 当前 Diff 可明确证伪且返回有效 ID | 从 Collector 删除 |
+| Review Filter | 当前 Diff 可明确证伪且返回有效 ID | 从 Collector 删除且不发布 |
 | Review Filter | 不确定、报错或超时 | 评论保留 |
 | GitHub 分流 | 无正行号 | 带原因进入 Summary |
 | Incremental | 与历史范围重叠 | 跳过新 Inline，计入 `skipped` |
 | Inline API | 最终发布失败 | 带 API 错误进入 Summary |
 | Summary API | 无法安全 upsert | 不冒险重复创建，Summary URL 为空 |
 
-这条链说明“保留评论”和“成功显示在 GitHub”不是同一保证：OCR 在内部尽量保守保留，发布器再根据位置、历史和 API 状态选择 Inline、Summary、Skip 或可观察失败。
+因此最终结果可能是 Inline、Summary、Incremental Skip、Filter 删除或可观察的发布失败；“OCR 找到了问题”本身不承诺 GitHub 一定展示一条行内评论。
 
 ---
 
@@ -1082,8 +1108,11 @@ OpenCodeReview 的核心价值不只是“用 LLM 看 Diff”，而是用工程�
 | Prompt | `internal/config/template/prompts/` |
 | Rule Resolver | `internal/config/rules/system_rules.go:252` |
 | GitHub Action | `action.yml` |
+| CLI JSON 输出模型 | `cmd/opencodereview/output.go:225`、`internal/model/review.go:3` |
 | PR 评论发布 | `scripts/github-actions/post-review-comments.js` |
+| PR 发布测试 | `scripts/github-actions/post-review-comments.test.js` |
+| GitHub Workflow 示例 | `examples/github_actions/ocr-review.yml` |
 
 ## 20. 验证说明
 
-本报告基于 Commit `3355baea0e83b3be7653e6f422c83242541f77c0` 的实际源码调用链整理，不仅依据 README。分析时源码仓库状态干净并与 `origin/main` 对齐。本轮逐项交叉阅读了 `internal/tool`、`internal/diff`、`internal/llmloop`、`internal/agent`、`internal/session`、`internal/telemetry` 及对应 Go 测试，并实际运行 `npm run test:github-actions`：评论发布与翻译同步两组 JavaScript 测试全部通过。当前分析环境未安装 Go，无法执行 `go test ./...`（`go: command not found`），因此 Go 侧结论来自只读源码与测试用例交叉核对，而非本机执行结果。
+本报告基于 Commit `3355baea0e83b3be7653e6f422c83242541f77c0` 的实际源码调用链整理，不仅依据 README。分析时源码仓库状态干净。此前轮次已交叉阅读 `internal/tool`、`internal/diff`、`internal/llmloop`、`internal/agent`、`internal/session`、`internal/telemetry` 及对应 Go 测试；本轮又逐项核对 `action.yml`、GitHub Workflow 示例、CLI JSON 输出模型、`scripts/github-actions/post-review-comments.js` 及其测试，并重新运行 `npm run test:github-actions`：评论发布与翻译同步两组 JavaScript 测试全部通过。当前分析环境未安装 Go，无法执行 `go test ./...`（`go: command not found`），因此 Go 侧结论来自只读源码与测试用例交叉核对，而非本机执行结果。
