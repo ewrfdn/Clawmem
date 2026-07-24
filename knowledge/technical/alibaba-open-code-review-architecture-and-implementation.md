@@ -178,7 +178,7 @@ git diff <merge-base> <to>
 Commit 模式对 Merge Commit 使用 `--diff-merges=first-parent`，即把 Merge Commit 与第一父提交比较，
 避免普通 `git show` 产生解析器不支持的 combined diff（`diff --cc`）。这回答了“一个 Merge Commit
 有两个父提交时以谁为旧版本”：OCR 明确采用第一父提交，而不是把两个方向揉成一份 Diff
-（`internal/diff/git.go:125-134`；`internal/diff/git_test.go:477`）。
+（`internal/diff/git.go:125-134`；`internal/diff/git_test.go:470-534`）。
 
 Workspace 模式优先使用：
 
@@ -196,10 +196,12 @@ git diff --staged
 
 > **初学者可能会问：工作区模式为何不直接运行三条 Git Diff 再拼接？**
 > `git diff HEAD` 已同时覆盖索引区（staged）和工作树（unstaged）相对 `HEAD` 的净变化，重复拼接
-> staged/unstaged Diff 反而可能造成重复。只有无首个 Commit、`HEAD` 不存在时才回退
-> `git diff --staged`；未跟踪文件通过 `git ls-files --others --exclude-standard` 单列并构造
-> “从 `/dev/null` 新增文件”的 Unified Diff（`internal/diff/git.go:267-337`）。若读取某个未跟踪文件
-> 失败，当前实现会跳过该文件而不是中止整次 Review（`internal/diff/git.go:289-294`）。
+> staged/unstaged Diff 反而可能造成重复。该命令**报错或输出为空**时实现都会再运行
+> `git diff --staged`；其中关键用途是无首个 Commit、`HEAD` 不存在时仍能审查已暂存文件，对应回归
+> 测试建立空仓库、只 `git add` 而不 Commit，断言仍取得 Diff。未跟踪文件则通过
+> `git ls-files --others --exclude-standard` 单列并构造“从 `/dev/null` 新增文件”的 Unified Diff
+> （`internal/diff/git.go:267-337`；`internal/diff/git_test.go:208-236`）。若读取某个未跟踪文件失败，
+> 当前实现会跳过该文件而不是中止整次 Review（`internal/diff/git.go:289-294`）。
 
 三个模式的参数互斥在访问 Git 前就会校验：`--commit` 不能与 Range 同用，`--from` 与 `--to`
 必须成对出现；无二者即 Workspace。`--resume` 又只支持 Commit 或 Range，因为工作区内容会持续
@@ -280,9 +282,12 @@ Prompt Token，但局部片段未必能说明函数、类型或调用链，因�
   （`internal/diff/parser.go:17-23,74-76`；`internal/agent/preview.go:31-34`；
   `internal/diff/parser_test.go:133-170`）。
 - Workspace 的未跟踪文件被合成为“`/dev/null → 新路径`”的新文件 Diff，全部内容都以 `+`
-  开头，而不是仅保留 `-U3`；空文件的 Hunk 行数为 0。文件读取失败会跳过，且读取函数会阻止
-  绝对路径、目录、路径穿越和指向仓库外的父级符号链接（`internal/diff/git.go:283-318`；
-  `internal/diff/workspace_file.go:11-59`；`internal/diff/workspace_file_test.go:10-134`）。
+  开头，而不是仅保留 `-U3`；空文件的 Hunk 行数为 0。`core.quotepath=false` 使中文等非 ASCII
+  路径保持原名。文件读取失败会跳过，且读取函数会阻止绝对路径、目录、路径穿越和指向仓库外的
+  **父目录**符号链接；若未跟踪项本身是符号链接，Diff 中写入的是链接目标的路径字符串，而不是
+  解引用并读取目标文件内容。测试专门让链接指向仓库外的“秘密文件”，断言秘密正文未进入 Diff
+  （`internal/diff/git.go:283-337`；`internal/diff/workspace_file.go:11-59`；
+  `internal/diff/git_test.go:149-170,287-330`；`internal/diff/workspace_file_test.go:10-134`）。
 
 对于 Commit/Range 模式，变更后的完整文件内容通过以下命令读取：
 
@@ -624,7 +629,18 @@ OCR 本地执行
 }
 ```
 
-这里的 `existing_code` 是**变更中已经存在、用于锚定评论的原代码片段**，不是建议如何修改；建议代码另放在可选的 `suggestion_code`。Schema 要求每项都有 `content`、`existing_code`、`category`、`severity`，并明确要求锚点只取新增代码，不包含删除行或未改上下文。执行器还兼容 `comments` 是 JSON 字符串的情况；缺少该字段、空数组或字符串不是合法 JSON 时，错误文本会作为 Tool Result 返回给模型修正。单项不是对象、运行时参数没有顶层 `path`，或单项缺少 `content`，都会被跳过（`internal/config/toolsconfig/tools.json:28-93`；`internal/tool/code_comment.go:34-87`；`internal/tool/code_comment_test.go`）。
+这里的 `existing_code` 是**变更中已经存在、用于锚定评论的原代码片段**，不是建议如何修改；建议代码另放在可选的 `suggestion_code`。Schema 要求每项都有 `content`、`existing_code`、`category`、`severity`，并明确要求锚点只取新增代码，不包含删除行或未改上下文。执行器还兼容 `comments` 是 JSON 字符串的情况；缺少该字段、空数组或字符串不是合法 JSON 时，错误文本会作为 Tool Result 返回给模型修正。单项不是对象、运行时参数没有顶层 `path`，或单项缺少 `content`，都会被跳过（`internal/config/toolsconfig/tools.json:28-93`；`internal/tool/code_comment.go:34-87`；`internal/tool/code_comment_test.go:12-101`）。
+
+这里有两层 JSON，失败语义不同，最小例子是：整个工具参数 `{"comments":` 残缺时，外层
+`parseToolArgs()` 直接返回 `Error parsing tool arguments`，Provider 不会执行；外层合法但
+`comments:"not json"` 时，才由 `ParseComments()` 返回“无法解析 comments JSON 字符串”。`null`
+参数会被正规化为空 Map，不会因注入当前路径而 panic，但随后仍因缺少 `comments` 得到错误文本。
+这些错误文本都是**非空** Tool Result，因而会带入下一轮让模型修正；它们不会触发下文专门防御
+“工具返回空字符串”的连续空结果计数（`internal/llmloop/loop.go:274-329`；
+`internal/llmloop/loop_test.go:273-382`；`internal/tool/code_comment_test.go:58-71`）。
+另一个容易误判的边界是：数组本身非空、但每项都因缺 `content` 等条件被跳过时，解析函数返回
+“零条评论 + 空错误”，`code_comment` 仍报告成功；所以“Tool Result 成功”不等于 Collector 一定新增
+了评论（`internal/tool/code_comment.go:50-87`；`internal/tool/code_comment_test.go:39-56`）。
 
 初学者可能会问：**既然 GitHub 最后需要行号，为什么不让模型直接输出行号？** 因为 Prompt 中的 Diff 行号、完整文件行号与 PR Head 的新侧坐标不是同一个概念，模型复制或心算很容易受 Hunk、删除行和多轮上下文影响。源码文本比裸数字更容易校验和重新定位，所以模型只表达“问题是什么”和“问题贴在哪段现有代码”，程序再把稳定的文本锚点换算成 `StartLine/EndLine`。另外，模型不能选择目标文件：`executeToolCall()` 会把当前 `newPath` 强制写入顶层 `path`，`ParseComments()` 再把它复制到数组内每条 `LlmComment`，避免幻觉路径把评论贴到其他文件（`internal/llmloop/loop.go:320-374`；`internal/model/review.go:3-18`）。
 
@@ -639,7 +655,7 @@ Schema 要求 `state` 为 `DONE` 或 `FAILED`，但当前执行器识别到工�
 循环还有多层保险，避免模型或外部服务让单文件永远运行：
 
 - **本轮没有 Tool Call**：追加一条 User 纠正消息，请模型重试或在完成时调用 `task_done`，然后进入下一次 LLM 请求（`internal/llmloop/loop.go:205-211`）。这类轮次会消耗工具请求预算，但不计入“连续空工具结果”计数。
-- **有 Tool Call，但没有任何非空有效结果**：把错误文本作为 Tool Result 回传；连续 3 轮仍为空则停止（`internal/llmloop/loop.go:214-255`）。注意执行错误通常本身是非空错误文本，因此会让模型有机会纠正参数。
+- **有 Tool Call，但所有工具都返回空字符串**：当前轮为每个空值构造 `Error: Tool execution returned no result.`；前两轮把该文本带入下一次请求，第 3 个连续空结果轮次直接保护性停止并返回未完成。任一非空结果都会把计数清零。解析失败、未知工具和执行错误通常本身就是非空错误文本，所以不属于“空结果”，仍会让模型看到原因并有机会纠正（`internal/llmloop/loop.go:214-267,274-329`）。
 - **达到调用预算**：每次发 LLM 请求前预算减一，默认 `MAX_TOOL_REQUEST_TIMES=30`；耗尽后返回 `false`，不是成功完成（`internal/llmloop/loop.go:150-168`、`264-267`，默认值见 `internal/config/template/task_template.json`）。
 - **上下文仍过长**：80% 阈值处同步压缩；压缩后仍超限则停止，详见第 13 节。
 - **LLM 请求报错或 Context 被取消**：立即返回 error；单文件调度 Context 默认由 CLI 的 `--timeout 10` 分钟限制，超时只使该文件失败，其他并发文件继续（`internal/agent/agent.go:372-420`、`cmd/opencodereview/flags.go:134`）。底层 LLM Client 还可有独立 HTTP 请求超时。
