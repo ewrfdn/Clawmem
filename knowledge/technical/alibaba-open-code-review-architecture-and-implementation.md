@@ -471,7 +471,7 @@ dispatchSubtasks()
 
 普通 error 与 panic 都在文件 goroutine 内转成失败记录和 warning；panic 还会 `recover` 并打印堆栈，所以其他文件继续。只有**返回 error 或 panic** 的数量等于已调度文件数时，整体才返回 `all N file review(s) failed`；保护性停止虽写 `review_item_failed`，当前实现不增加这个汇总计数，全部这样停止时未必返回整体错误。这是“检查点失败”和“进程级失败”的重要边界（`internal/agent/agent.go:387-447`；`internal/agent/coverage_test.go:634-656`）。
 
-文件超时 `ConcurrentTaskTimeout` 以分钟计，0 表示不设置；context 在取得文件 Semaphore、进入 goroutine后才创建，覆盖 Plan、Main、工具调用以及 Review Filter 所收到的父 context（`internal/agent/agent.go:93-97,371-413,521-636`）。但它不是硬杀死：排队等待文件槽位的时间不计入，底层 LLM/工具必须合作响应 context；`CommentWorkerPool.AwaitKey()` 本身也没有 context 分支，若后台工作不返回，等待仍可能超过期限（`internal/llmloop/loop.go:274-306`；`internal/llmloop/pool.go:132-147`）。另外模板 `LlmConversation.Timeout` 目前只在 Re-location 被读取并按秒建立更短 context；Plan/Main 的同名字段未在其调用路径消费，不能把它当成阶段级超时（`internal/diff/relocation.go:20-54`；`internal/agent/agent.go:876-906`）。
+文件超时 `ConcurrentTaskTimeout` 以分钟计，0 表示不设置；context 在取得文件 Semaphore、进入 goroutine后才创建，传给 Plan、Main、同步工具调用和 Review Filter（`internal/agent/agent.go:93-97,371-413,521-636`）。但它不是覆盖所有后台工作的硬截止时间：排队等待文件槽位的时间不计入，底层 LLM/同步工具必须合作响应 context；`code_comment` 的异步定位闭包还会用 `context.WithoutCancel(ctx)` 明确脱离文件 context 的取消信号，再由 Re-location 模板自己的秒级 Timeout 约束单次定位。之后 `CommentWorkerPool.AwaitKey()` 本身没有 context 分支，所以若后台工作不返回，文件等待仍可能超过 CLI 的分钟级期限（`internal/llmloop/loop.go:333-394`；`internal/llmloop/pool.go:132-147`；`internal/diff/relocation.go:20-54`）。Plan/Main 模板的同名 `LlmConversation.Timeout` 字段则未在其调用路径消费，不能把它当成阶段级超时（`internal/agent/agent.go:876-925`）。
 
 ### 6.1 为什么按文件拆分
 
@@ -662,7 +662,7 @@ Schema 要求 `state` 为 `DONE` 或 `FAILED`，但当前执行器识别到工�
 
 `task_template.json` 虽然为 Main、Plan、Memory Compression 声明了 120、180、120 秒的 `timeout` 字段，但当前这三条执行路径没有用这些字段创建子 Context；不能把它们误解为当前生效的阶段级硬超时。当前明确使用任务模板 Timeout 的是 Review Filter 和 Re-location，而 Plan/Main/压缩主要受上层单文件 Context 与 LLM Client 请求超时约束（用法对照 `internal/agent/agent.go:668-683`、`internal/diff/relocation.go:33-35`）。
 
-所有“未显式 `task_done`”的停止最终都会让 `executeSubtask()` 得到 `mainCompleted=false`，文件被记录为 `main_task did not complete before stopping`；这能防止被迫截断被伪装为成功（`internal/agent/agent.go:606-635`）。
+所有“未显式 `task_done`”的停止最终都会让 `executeSubtask()` 得到 `mainCompleted=false`，文件被记录为 `main_task did not complete before stopping`；这能防止被迫截断被伪装为可 Resume 的成功（`internal/agent/agent.go:606-635`）。这里的“文件失败”是检查点状态，不是事务回滚：Main 停止前已经放进全局 Collector 的评论不会自动撤销；若 Main 只是保护性停止而没有返回 error，代码还会先等待该文件的异步评论并运行 Review Filter，再记录失败。真正的 Main error 会跳过该文件 Filter，但全局收尾仍等待评论池，已经提交的异步评论仍可能进入本次输出。只有普通 error/panic 的数量等于全部已调度文件时，运行整体才以错误结束且 CLI 不产出成功 JSON；部分文件失败则可带 warnings 和其余/既有评论完成（`internal/agent/agent.go:387-447,606-635`；`cmd/opencodereview/review_cmd.go:127-145`；`cmd/opencodereview/output.go:261-317`）。
 
 ### 8.5 MCP 扩展
 
@@ -792,7 +792,7 @@ Collector 还有 `Snapshot()`、`Since()`、`ReplaceSince()`：它们不是 PR R
 
 Review Filter 在“当前文件 Worker 已排空”之后、文件任务返回之前执行。输入是当前 Diff 和 Collector 中该路径的全部评论，程序为它们生成稳定的临时 ID `c-0`、`c-1`；模型只能返回待删除 ID 数组，例如 `["c-0", "c-3"]`，程序再按该路径内的索引调用 `RemoveByPathAndIndices()`（`internal/agent/agent.go:618-629,639-710`；`internal/tool/comment_collector.go:91-113`）。
 
-它的 Prompt 有意保守：**只有当前 Diff 自身就能清楚证明评论在事实或逻辑上错误时才删除**；若需要 Diff 之外的信息、存在歧义，或主 Agent 可能通过工具看到更多上下文，都必须保留。它不重写评论、不修行号，也不按严重度打分。这正是它与 Re-location 的边界：Filter 是正确性闸门，Re-location 是位置修复器（`internal/config/template/prompts/review_filter_system_prompt.txt`；`internal/config/template/prompts/review_filter_user_prompt.txt`）。
+它的 Prompt 有意保守：**只有当前 Diff 自身就能清楚证明评论在事实或逻辑上错误时才删除**；若需要 Diff 之外的信息、存在歧义，或主 Agent 可能通过工具看到更多上下文，都必须保留。它不重写评论、不修行号，也不按严重度打分。这正是它与 Re-location 的边界：Filter 是正确性闸门，Re-location 是位置修复器（`internal/config/template/prompts/review_filter_task_system.md`；`internal/config/template/prompts/review_filter_task_user.md`）。
 
 失败默认偏向“不漏报”：未配置任务、没有评论、LLM 请求错误/超时、响应不是可解析数组、ID 非法或越界时，不删除对应评论；只有解析出的有效 ID 才会移除。测试还验证重复 ID 会合并、合法与非法 ID 混合时只采用合法项（`internal/agent/agent.go:646-710,746-789`；`internal/agent/coverage_test.go`）。
 
@@ -902,6 +902,15 @@ ocr review --from "${MERGE_BASE}" --to "${HEAD_SHA}" --format json
 ```
 
 stdout 保存为 `/tmp/ocr-result.json`，stderr 单独保存；非零退出码时可先上传两者为 Artifact，然后 Job 失败，不进入评论发布。成功时 `actions/github-script` 加载 `scripts/github-actions/post-review-comments.js`（`action.yml:227-305`）。CLI JSON 顶层包含 `status/message/summary/tool_calls/comments/warnings/...`；每个 `comments[]` 的输出模型包含 `path`、`content`、`start_line`、`end_line`，并可带 `existing_code`、`suggestion_code`、`category`、`severity`。发布器用路径与行号定位、用 `content` 生成正文；只有 `existing_code` 与 `suggestion_code` 同时存在时才追加 GitHub suggestion/Before-After 块，当前发布格式不展示 `category/severity`（`cmd/opencodereview/output.go:225-317`；`internal/model/review.go:3-17`；`scripts/github-actions/post-review-comments.js:1013-1044`）。
+
+> **初学者可能会问：有文件失败时，JSON 还是“成功”吗？** 要区分进程失败与可降级的文件失败。
+> 没有 warning 时 `status` 是 `success`；存在非致命 warning 时是 `completed_with_warnings`；只要 warning
+> 中含 `subtask_error`，即使其他文件已完成，状态也是 `completed_with_errors`，但命令仍可正常输出一份
+> JSON，Action 会继续发布其中保留下来的评论和 warning。若所有已调度文件都以普通 error/panic 失败，
+> `Agent.Run()` 返回 error，`runReview()` 以非零状态退出；Action 此时只保留 stdout/stderr Artifact（若开启），
+> 不把残缺输出当作可发布 JSON。保护性停止只写失败检查点而不增加 `subtask_error` 计数，是当前实现的特殊
+> 边界，不能仅凭 JSON `status` 判断每个文件都有可复用成功检查点（`internal/agent/agent.go:387-447`；
+> `cmd/opencodereview/output.go:261-317`；`action.yml:227-280`）。
 
 转换规则如下：
 
