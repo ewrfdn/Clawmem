@@ -1,5 +1,23 @@
 # 已完成的目标
 
+## ✅ 2026-07-24
+
+### 完成 Alibaba OpenCodeReview 源码级架构报告
+- 还原 Workspace / Commit / Range 三种 Diff 模式、逐文件并发和 Plan/Main LLM 工具循环
+- 分析确定性行号定位、LLM 重定位、保守事实核查、Session 恢复和 GitHub 发布链路
+- 明确可靠 Agent 流水线中确定性代码与 LLM 语义判断的职责边界
+- **完成日期：** 2026-07-24
+
+### 整理 gRPC 大文件中继传输设计
+- 面向 NAT 后 Worker 设计 ControlTunnel / TransferTunnel 分离
+- 用有界缓冲、累计 ACK、Credit Window 和 committed offset 建立端到端背压与续传语义
+- **完成日期：** 2026-07-24
+
+### 完成 A 股 2026 W30 周复盘
+- 归纳半导体、AI 算力、新能源、黄金和军工的周内结构
+- 记录模拟策略 3/3，同时明确小样本不能证明长期稳定性
+- **完成日期：** 2026-07-24
+
 ## ✅ 2026-07-18
 
 ### 将 A/B/W/C 线程的关闭落实为未来行为
