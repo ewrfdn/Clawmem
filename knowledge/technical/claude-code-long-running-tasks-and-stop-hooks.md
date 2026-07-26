@@ -215,6 +215,199 @@ return {
 
 需要注意：`agentId` 存在时，子 Agent 不走主线程的这套 continuation 逻辑；子 Agent 还可能受到自己的 `maxTurns` 或 Hook 限制。
 
+### 2.3 交互式 token target 的完整生效链路
+
+交互式写法（例如 `+500k` 或 `use 2M tokens`）不是模型本身的特殊模式，也不是 API 收到一个字符串后自动保证输出指定数量。它是 Claude Code 客户端实现的一套控制流程：
+
+```text
+用户输入 Prompt
+    ↓
+本地正则解析 token target
+    ↓
+保存为当前 turn 的预算状态
+    ↓
+加入 token budget 系统提示
+    ↓
+请求模型并统计 output token
+    ↓
+模型提前结束时，客户端检查预算
+    ↓
+注入 continuation nudge 并再次请求模型
+```
+
+#### 第一步：本地解析 Prompt
+
+`src/utils/tokenBudget.ts` 中使用正则解析：
+
+```ts
+const SHORTHAND_START_RE =
+  /^\s*\+(\d+(?:\.\d+)?)\s*(k|m|b)\b/i
+
+const SHORTHAND_END_RE =
+  /\s\+(\d+(?:\.\d+)?)\s*(k|m|b)\s*[.!?]?\s*$/i
+
+const VERBOSE_RE =
+  /\b(?:use|spend)\s+(\d+(?:\.\d+)?)\s*(k|m|b)\s*tokens?\b/i
+```
+
+支持：
+
+```text
++500k
+use 2M tokens
+spend 1B tokens
+```
+
+单位转换为：
+
+```ts
+const MULTIPLIERS = {
+  k: 1_000,
+  m: 1_000_000,
+  b: 1_000_000_000,
+}
+```
+
+这一步完全在客户端完成，不依赖模型理解 `+500k` 的含义。
+
+#### 第二步：保存当前 turn 的状态
+
+`src/screens/REPL.tsx` 会调用：
+
+```ts
+const parsedBudget = input
+  ? parseTokenBudget(input)
+  : null
+
+snapshotOutputTokensForTurn(
+  parsedBudget ?? getCurrentTurnTokenBudget(),
+)
+```
+
+状态定义在 `src/bootstrap/state.ts`：
+
+```ts
+let outputTokensAtTurnStart = 0
+let currentTurnTokenBudget: number | null = null
+
+export function snapshotOutputTokensForTurn(
+  budget: number | null,
+): void {
+  outputTokensAtTurnStart = getTotalOutputTokens()
+  currentTurnTokenBudget = budget
+  budgetContinuationCount = 0
+}
+```
+
+没有指定 target 时，状态是：
+
+```ts
+currentTurnTokenBudget === null
+```
+
+因此不存在默认的 `500k` 目标。`+500k` 只是示例和用户主动指定的目标。
+
+#### 第三步：加入系统提示
+
+当 `TOKEN_BUDGET` feature 开启时，`src/constants/prompts.ts` 会追加类似规则：
+
+```text
+When the user specifies a token target, your output token count
+will be shown each turn. Keep working until you approach the target.
+The target is a hard minimum, not a suggestion.
+If you stop early, the system will automatically continue you.
+```
+
+这段提示指导模型不要过早总结，但真正的自动续接仍由客户端运行时负责。
+
+#### 第四步：统计 output token
+
+当前 turn 的输出 token 通过差值计算：
+
+```ts
+export function getTurnOutputTokens(): number {
+  return getTotalOutputTokens() - outputTokensAtTurnStart
+}
+```
+
+因此这里主要统计的是 **output token**，不是输入上下文 token，也不是 thinking budget。
+
+#### 第五步：提前停止时注入 continuation
+
+每轮结束时，`src/query.ts` 调用：
+
+```ts
+const decision = checkTokenBudget(
+  budgetTracker!,
+  toolUseContext.agentId,
+  getCurrentTurnTokenBudget(),
+  getTurnOutputTokens(),
+)
+```
+
+如果判断应该继续，就创建 meta user message：
+
+```ts
+createUserMessage({
+  content: decision.nudgeMessage,
+  isMeta: true,
+})
+```
+
+消息内容类似：
+
+```text
+Stopped at 42% of token target (210,000 / 500,000).
+Keep working — do not summarize.
+```
+
+然后进入：
+
+```ts
+transition: {
+  reason: 'token_budget_continuation',
+}
+```
+
+再次请求模型。也就是说真正的机制是：
+
+```text
+模型提前结束
+    ↓
+客户端发现 token target 尚未达到
+    ↓
+客户端主动生成 continuation 消息
+    ↓
+模型看到新消息并继续工作
+```
+
+#### 第六步：仍然受终止条件约束
+
+token target 不是无条件保证。以下情况仍然可以让任务停止：
+
+```text
+达到目标附近
+    → 不再自动 continuation
+
+连续多次 continuation，但新增 token 很少
+    → diminishing returns，停止
+
+达到 maxTurns、发生 API 错误或用户中断
+    → 停止
+```
+
+因此它应该理解为：
+
+```text
+客户端实现的“提前停止检测 + 自动续接”机制
+```
+
+而不是：
+
+```text
+模型拥有一个永远运行的长任务模式
+```
+
 ---
 
 ## 3. 上下文维护：为什么长任务可以运行很多轮
