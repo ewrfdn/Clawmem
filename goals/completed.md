@@ -1,5 +1,19 @@
 # 已完成的目标
 
+## ✅ 2026-07-27
+
+### 完成 Claude Code compact / resume 机制的源码级整理
+- 确认 compact summary 作为特殊 user message 与 `compact_boundary` 一起持久化到 session transcript JSONL，而不是独立 summary 文件
+- 还原 `/resume` 按 `parentUuid` 恢复消息链、状态与最近 compact 边界后 active context 的过程
+- 区分磁盘中仍保留的原始 transcript 与默认发送给模型的 active context
+- **完成日期：** 2026-07-27
+
+### 完成 Claude Code 多 Agent 系统实现报告
+- 还原 Agent discovery、metadata 暴露、AgentDefinition registry 与 spawn 时完整 system prompt 注入
+- 区分 Custom Agent、普通 Subagent、Fork 和 Teammate 的创建条件与协作原语
+- 明确 Agent 定义存在不等于自动启动，默认调度仍由主 Agent 在 Agent Loop 中动态决定
+- **完成日期：** 2026-07-27
+
 ## ✅ 2026-07-24
 
 ### 完成 Alibaba OpenCodeReview 源码级架构报告
