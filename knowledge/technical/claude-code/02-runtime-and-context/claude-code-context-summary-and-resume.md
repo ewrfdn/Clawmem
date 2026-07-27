@@ -676,3 +676,405 @@ UI：隐藏 summary，显示普通对话消息
 ```
 
 这就是 Claude Code 如何在不把整个旧对话重新塞回上下文的情况下，恢复长任务并继续执行。
+
+---
+
+## 15. Compact 何时触发：检查、阈值与分支
+
+### 15.1 每轮 query 都检查，但不会每轮都 compact
+
+主 Agent loop 位于：
+
+```text
+src/query.ts
+```
+
+每一次准备向模型请求前，`query()` 都会调用 `autoCompactIfNeeded()`；实现位于：
+
+```text
+src/services/compact/autoCompact.ts
+```
+
+它首先执行 `shouldAutoCompact()`。只有其返回 `true`，并且其他上下文管理机制没有接管，才会调用：
+
+```ts
+compactConversation(...)
+```
+
+因此应区分两个概念：
+
+```text
+每个 query iteration：检查是否需要自动压缩
+真正超过阈值时：调用 compactConversation 生成 summary
+```
+
+一次用户请求可能经过多轮 Agent loop（模型调用工具、收到工具结果、继续推理等），因而也可能经历多次检查；但不会“每轮无条件压缩”。
+
+### 15.2 不自动压缩的 guard
+
+`shouldAutoCompact()` 会先排除会造成递归或冲突的路径：
+
+```text
+querySource === 'compact'           → false，避免压缩摘要请求自己
+querySource === 'session_memory'    → false，避免 session-memory 递归
+特定 context-collapse 路径         → false，由 collapse 机制接管
+DISABLE_COMPACT / DISABLE_AUTO_COMPACT → false
+配置关闭 autoCompactEnabled         → false
+```
+
+此外，当 reactive compact 或 context collapse 特性已接管上下文管理时，传统 auto compact 也可能被关闭。
+
+### 15.3 阈值的本质
+
+自动压缩依据当前估算 token 数与模型阈值比较：
+
+```ts
+tokenCount = tokenCountWithEstimation(messages) - snipTokensFreed
+threshold = getAutoCompactThreshold(model)
+
+return tokenCount >= threshold
+```
+
+`snipTokensFreed` 用于扣除本轮 snip/microcompact 已释放、但尚未反映到 API usage 的 token。
+
+阈值大意为：
+
+```text
+模型有效上下文窗口
+- 为输出预留的 token
+- AUTOCOMPACT_BUFFER_TOKENS（13,000）
+```
+
+不是达到模型原始 context window 才 compact，而是在保留安全余量时提前触发。以 200K context、输出预留 20K 为例，常见估算为：
+
+```text
+effective window ≈ 180K
+auto-compact threshold ≈ 167K
+```
+
+### 15.4 触发后并非必然走传统 summary
+
+自动压缩路径还会优先尝试 Session Memory Compaction；若该机制成功处理，可能不会调用 `compactConversation()`。传统自动压缩的典型链路是：
+
+```text
+query loop
+  → autoCompactIfNeeded()
+  → shouldAutoCompact()
+  → trySessionMemoryCompaction()（如启用）
+  → compactConversation()
+```
+
+手动 `/compact` 则直接调用 `compactConversation()`，不需要先满足自动阈值，并可携带自定义摘要指令。
+
+---
+
+## 16. 估算 token 的规则
+
+相关文件：
+
+```text
+src/utils/tokens.ts
+src/services/tokenEstimation.ts
+```
+
+Claude Code 不会在每一轮单独调用 tokenizer/count-tokens API，而是使用混合值：
+
+```text
+最近一次 API 响应的 usage 精确计数
++ 此响应后新增消息的本地粗估
+```
+
+概念上：
+
+```ts
+tokenCountWithEstimation(messages) =
+  getTokenCountFromUsage(lastApiUsage) +
+  roughTokenCountEstimationForMessages(messagesAfterThatResponse)
+```
+
+### 16.1 API usage 部分
+
+最近一次 assistant API response 的 token 使用量会合并：
+
+```ts
+usage.input_tokens
++ (usage.cache_creation_input_tokens ?? 0)
++ (usage.cache_read_input_tokens ?? 0)
++ usage.output_tokens
+```
+
+这是服务端返回的精确值，涵盖该请求的完整 prompt/cache/output 视角。
+
+### 16.2 新增消息的本地粗估
+
+默认算法是：
+
+```ts
+Math.round(content.length / 4)
+```
+
+即按约 **4 个字符（源码变量名为 bytesPerToken）约等于 1 token** 估算。它是快速经验值，不是严格 tokenizer。
+
+不同内容会调整：
+
+| 内容 | 粗估规则 |
+|---|---|
+| 普通文本、代码 | `length / 4` |
+| JSON / JSONL / JSONC | `length / 2`，对符号密集内容更保守 |
+| image / document | 固定估算 `2000` token，避免 base64 按字符数严重失真 |
+| tool_use | tool 名称与 `JSON.stringify(input)` 的估算 |
+| tool_result | 递归估算其 content |
+| thinking / redacted_thinking | 按文本内容估算 |
+| 未知 block | `JSON.stringify(block)` 后估算 |
+
+若一次 API response 的并行 tool use 被流式拆为多条 assistant message，代码会利用共同的 API response id 向前寻找同一轮的最早 message，防止漏算该轮中间插入的 tool results。
+
+---
+
+## 17. compactConversation：生成 summary 的调用细节
+
+核心实现：
+
+```text
+src/services/compact/compact.ts
+src/services/compact/prompt.ts
+```
+
+入口：
+
+```ts
+compactConversation(...): Promise<CompactionResult>
+```
+
+它创建 `getCompactPrompt(customInstructions)` 产生的 user 请求，然后调用 `streamCompactSummary()`。摘要模型调用有两条路径：
+
+1. **默认 forked-agent 路径**：`runForkedAgent()`，`maxTurns: 1`，以共享主对话 prompt cache；
+2. **普通 streaming fallback**：`queryModelWithStreaming()`。
+
+两条路径都将摘要任务限制为文本生成：工具调用会被拒绝，普通 streaming 路径也明确设置：
+
+```ts
+thinkingConfig: { type: 'disabled' }
+```
+
+摘要 request 使用主 loop model：
+
+```ts
+model: context.options.mainLoopModel
+```
+
+为了降低摘要输入体积，发送前会剥离/占位图片和文档，并移除会在 compact 后重新注入的 attachment。
+
+### 17.1 Prompt 约束
+
+`src/services/compact/prompt.ts` 的 `NO_TOOLS_PREAMBLE` 明确要求：
+
+```text
+TEXT ONLY
+Do NOT call any tools
+输出 <analysis> 与 <summary> block
+```
+
+主 prompt 要求保留：用户主要意图、技术概念、文件和代码段、错误与修复、问题解决过程、全部用户消息、pending task、当前工作和下一步。
+
+模型回包经过 `formatCompactSummary()`：
+
+```text
+<analysis>...</analysis>  → 删除
+<summary>...</summary>    → 转为 Summary: ...
+```
+
+因此模型可以先在 analysis block 内组织，真正写回 session 的是清理后的 summary 文本。
+
+### 17.2 输出长度上限
+
+摘要输出上限为：
+
+```ts
+Math.min(
+  COMPACT_MAX_OUTPUT_TOKENS,
+  getMaxOutputTokensForModel(context.options.mainLoopModel),
+)
+```
+
+其中：
+
+```ts
+// src/utils/context.ts
+COMPACT_MAX_OUTPUT_TOKENS = 20_000
+```
+
+所以实际最大摘要输出是：
+
+```text
+min(20,000, 当前模型允许的最大输出 token)
+```
+
+---
+
+## 18. 如果“用来生成 summary 的历史”仍然太长
+
+`compactConversation()` 对 compaction 请求自身的 prompt-too-long 有专门降级路径，核心循环在：
+
+```text
+src/services/compact/compact.ts:450-491（源码快照行号）
+```
+
+若 `streamCompactSummary()` 返回以 `PROMPT_TOO_LONG_ERROR_MESSAGE` 开头的内容：
+
+1. 调用 `truncateHeadForPTLRetry(messagesToSummarize, summaryResponse)`；
+2. 从**最旧的 API-round group** 开始丢弃消息；
+3. 用截断后的消息重试 summary；
+4. 最多重试 `MAX_PTL_RETRIES = 3` 次。
+
+### 18.1 截断量如何决定
+
+实现位于：
+
+```text
+src/services/compact/compact.ts:243-291
+```
+
+消息会先由 `groupMessagesByApiRound()` 分组。若 provider 的报错中可解析出超限 token gap，则从最旧 group 起累计粗估 token，直到覆盖 gap；若 gap 无法解析（部分 Vertex/Bedrock 错误格式），则丢弃最旧的约 20% group：
+
+```ts
+dropCount = Math.max(1, Math.floor(groups.length * 0.2))
+```
+
+无论哪种情况，始终至少留一组可供总结：
+
+```ts
+dropCount = Math.min(dropCount, groups.length - 1)
+```
+
+若截断后开头是 assistant message，会补一个内部 user marker：
+
+```text
+[earlier conversation truncated for compaction retry]
+```
+
+这是为了满足 API 的首条消息 role 必须是 user 的约束。
+
+### 18.2 失败结果与语义
+
+如果最多三次截断重试仍 prompt-too-long，或已经只剩一组、无法再丢消息，`compactConversation()` 抛出：
+
+```text
+Conversation too long. Press esc twice to go up a few messages and try again.
+```
+
+这个 fallback 是**有损的**：被从头部删除的历史不会出现在最终 summary 中。源码注释称它是 proactive/manual compaction 的“last-resort escape hatch”；reactive compact 还有独立的更完整处理路径。
+
+---
+
+## 19. compactConversation 的返回值与消息重建
+
+`compactConversation()` 返回的不是单独的 `Message[]`，而是：
+
+```ts
+Promise<CompactionResult>
+```
+
+其关键字段为：
+
+```ts
+interface CompactionResult {
+  boundaryMarker: SystemMessage
+  summaryMessages: UserMessage[]
+  attachments: AttachmentMessage[]
+  hookResults: HookResultMessage[]
+  messagesToKeep?: Message[]
+  userDisplayMessage?: string
+  preCompactTokenCount?: number
+  postCompactTokenCount?: number
+  truePostCompactTokenCount?: number
+  compactionUsage?: unknown
+}
+```
+
+调用方再将其展开为 post-compact message list，语义顺序为：
+
+```ts
+[
+  result.boundaryMarker,
+  ...result.summaryMessages,
+  ...(result.messagesToKeep ?? []),
+  ...result.attachments,
+  ...result.hookResults,
+]
+```
+
+含义：
+
+```text
+compact boundary
+→ summary user message
+→ （partial compact 时）保留的较新原始消息
+→ 重新注入的附件/文件/plan/skill/tool schema
+→ SessionStart hook 消息
+```
+
+这才是随后继续 Agent loop 的新上下文消息列表。
+
+---
+
+## 20. Message、transcript 与 parentUuid
+
+运行时发送给 query loop 的 `Message[]` 是平铺数组，用 `type` 作为 tagged-union 判别：
+
+```text
+UserMessage | AssistantMessage | SystemMessage | AttachmentMessage | HookResultMessage | ...
+```
+
+常见运行时字段：
+
+```ts
+{
+  type: 'user' | 'assistant' | 'system' | ...,
+  uuid: UUID,
+  timestamp: string,
+  message?: { role, content, ... },
+  // user message 可有：isMeta / isVirtual / isCompactSummary /
+  // isVisibleInTranscriptOnly / toolUseResult / sourceToolAssistantUUID 等
+}
+```
+
+**运行时的 `Message[]` 本身不通过 `parentUuid` 组织关系**；它是有序数组，顺序即会话顺序。
+
+`parentUuid` 出现在持久化 JSONL 的 `TranscriptMessage` 中，用来构建消息树、支持 `/rewind` 和分支：
+
+```ts
+{
+  ...serializedMessage,
+  parentUuid: UUID | null,
+  logicalParentUuid?: UUID | null,
+  isSidechain: boolean,
+}
+```
+
+因此：
+
+```text
+内存 query context：平铺 Message[]
+磁盘 transcript：带 parentUuid 的消息图
+```
+
+恢复时会从当前 leaf 反向沿 `parentUuid` 构造活动链，再反序列化为 query 使用的消息数组。`logicalParentUuid` 主要辅助 compact/session 边界语义，不表示新旧 JSONL 文件间的引用。
+
+---
+
+## 21. 源码定位汇总（本快照）
+
+| 主题 | 主要源码位置 |
+|---|---|
+| Agent loop 中的 auto-compact 调用 | `src/query.ts` |
+| 触发阈值、auto compact 分支 | `src/services/compact/autoCompact.ts` |
+| compact 主流程与 PTL fallback | `src/services/compact/compact.ts` |
+| summary prompt / 格式化 / summary user message | `src/services/compact/prompt.ts` |
+| token 计数锚点与 usage 合并 | `src/utils/tokens.ts` |
+| block 粗估 token 规则 | `src/services/tokenEstimation.ts` |
+| compact 输出上限常量 | `src/utils/context.ts` |
+| runtime message 构造与处理 | `src/utils/messages.ts` |
+| transcript message 与 parentUuid | `src/types/logs.ts` |
+
+> 注意：本分析针对工作区中的源码快照。该快照存在少量缺失/生成型类型文件，类型字段以实际构造函数、调用点与 transcript 类型为准；不同 Claude Code 版本的字段和 feature flag 分支可能变化。
