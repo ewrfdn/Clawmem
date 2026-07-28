@@ -1,5 +1,13 @@
 # 已完成的目标
 
+## ✅ 2026-07-28
+
+### 扩展 Claude Code 上下文压缩源码分析
+- 将 compact/resume 文档补齐到触发 guard、阈值、token 估算和超长历史截断路径
+- 说明 compactConversation 的返回值、消息重建、transcript 持久化与 `parentUuid` 边界
+- 汇总关键源码入口，形成可复核的完整机制链路
+- **完成日期：** 2026-07-27（晚间补充，7/28 蒸馏）
+
 ## ✅ 2026-07-27
 
 ### 完成 Claude Code compact / resume 机制的源码级整理
