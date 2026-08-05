@@ -422,6 +422,261 @@ kubectl get pods -n demo -w
 
 如果 YAML 中仍写着 `replicas: 3`，下次 `kubectl apply` 可能把副本数改回 3。正式环境要明确由 YAML、HPA 或其他系统中的哪一方负责副本数。
 
+
+### 7.4 两个 Pod 互为备份时如何无中断更新
+
+假设一个无状态 Server 有 2 个 Pod 互为备份，并由同一个 Service 对外提供访问：
+
+```text
+Service
+  ├── pod-a v1 Ready
+  └── pod-b v1 Ready
+```
+
+更新服务时，目标通常不是“先停一个旧 Pod，再启动一个新 Pod”，而是：
+
+```text
+先启动新版本 Pod → 等新 Pod Ready → 再下线旧 Pod → 重复直到全部替换
+```
+
+Kubernetes 中最常见的做法是使用 Deployment 的 RollingUpdate 策略：
+
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+```
+
+含义：
+
+- `maxUnavailable: 0`：更新过程中不允许可用 Pod 数量低于期望副本数。期望是 2 个副本，就始终保持 2 个可用副本。
+- `maxSurge: 1`：更新过程中允许临时多启动 1 个 Pod。原本 2 个 Pod，更新时可以临时变成 3 个。
+
+对于 2 副本服务，推荐配置：
+
+```yaml
+replicas: 2
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+```
+
+这样更新时大致会变成：
+
+```text
+Step 1:
+- pod-a v1 Ready
+- pod-b v1 Ready
+- pod-c v2 Starting
+
+Step 2:
+- pod-a v1 Ready
+- pod-b v1 Ready
+- pod-c v2 Ready
+
+Step 3:
+- pod-a v1 Terminating
+- pod-b v1 Ready
+- pod-c v2 Ready
+
+Step 4:
+- pod-b v1 Ready
+- pod-c v2 Ready
+- pod-d v2 Starting
+
+Step 5:
+- pod-b v1 Ready
+- pod-c v2 Ready
+- pod-d v2 Ready
+
+Step 6:
+- pod-b v1 Terminating
+- pod-c v2 Ready
+- pod-d v2 Ready
+```
+
+最终 Service 后端全部变成新版本：
+
+```text
+Service
+  ├── pod-c v2 Ready
+  └── pod-d v2 Ready
+```
+
+整个过程中，Service 只会把流量转发给 Ready 的 Pod。
+
+#### 7.4.1 完整示例
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-server
+  namespace: demo
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: my-server
+  template:
+    metadata:
+      labels:
+        app: my-server
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: my-server
+          image: my-server:v1
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - sleep 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-server
+  namespace: demo
+spec:
+  selector:
+    app: my-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+```
+
+更新镜像：
+
+```bash
+kubectl set image deployment/my-server my-server=my-server:v2 -n demo
+kubectl rollout status deployment/my-server -n demo
+kubectl get pods -n demo -w
+```
+
+如果新版本有问题，回滚：
+
+```bash
+kubectl rollout undo deployment/my-server -n demo
+```
+
+#### 7.4.2 readinessProbe 是无中断更新的关键
+
+仅仅有 2 个 Pod 并不等于无中断。真正关键的是：
+
+> 新 Pod 必须在准备好接流量之后，才会被 Service 加入后端。
+
+这由 `readinessProbe` 决定。没有 readiness probe 时，Kubernetes 可能在容器进程刚启动时就认为它可用，但实际应用可能还在加载配置、连接数据库、初始化缓存或预热运行环境。
+
+常见接口设计：
+
+- `/live`：进程是否还活着，用于 liveness probe；
+- `/ready`：是否已经准备好接业务流量，用于 readiness probe。
+
+不要把 liveness probe 写成对数据库、缓存等外部依赖的强检查，否则外部依赖短暂抖动时，可能导致所有 Pod 被反复重启。
+
+#### 7.4.3 优雅下线：preStop 与 SIGTERM
+
+滚动更新删除旧 Pod 时，正在处理的请求可能还没结束。比较稳的做法是：
+
+1. Pod 进入 Terminating；
+2. Service 不再把新流量转发给这个 Pod；
+3. 应用收到 `SIGTERM` 后停止接收新请求；
+4. 等待已有请求处理完成；
+5. 关闭连接并退出。
+
+`preStop: sleep 10` 是一种简单缓冲方式，但更好的方式是在应用代码里实现 graceful shutdown。
+
+```yaml
+terminationGracePeriodSeconds: 30
+lifecycle:
+  preStop:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - sleep 10
+```
+
+#### 7.4.4 如果资源不够，不能临时多起一个 Pod
+
+如果集群资源不足，无法在 2 个旧 Pod 之外再临时启动 1 个新 Pod，可以使用：
+
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 0
+```
+
+这表示先下线 1 个旧 Pod，再启动 1 个新 Pod。它也可以避免服务完全中断，但更新期间只剩 1 个 Pod 扛流量，风险更高：
+
+- 容量临时降低；
+- 如果剩下的旧 Pod 出问题，服务会中断；
+- 如果新 Pod 启动很慢，低容量状态持续更久。
+
+所以 2 副本服务想尽量无中断，优先使用：
+
+```yaml
+maxUnavailable: 0
+maxSurge: 1
+```
+
+#### 7.4.5 PodDisruptionBudget：节点维护时的可用性保护
+
+RollingUpdate 主要处理应用发布。节点维护、主动驱逐等场景可以再加 PodDisruptionBudget（PDB）：
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: my-server-pdb
+  namespace: demo
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: my-server
+```
+
+对于 2 副本服务，`minAvailable: 1` 表示自愿中断时至少保留 1 个可用 Pod。
+
+如果服务要求更严格，也可以设置 `minAvailable: 2`，但这会让节点维护和驱逐更难成功，需要结合副本数、节点数和资源余量判断。
+
+总结：
+
+> 2 个 Pod 互为备份的服务，要做不间断更新，核心组合是 `Deployment + Service + RollingUpdate + readinessProbe`。
+> 推荐起点是 `replicas: 2`、`maxUnavailable: 0`、`maxSurge: 1`，让 Kubernetes 先拉起新 Pod，确认 Ready 后再逐个替换旧 Pod。
+
 ## 8. 常用 kubectl 命令速查
 
 ### 8.1 集群与上下文
