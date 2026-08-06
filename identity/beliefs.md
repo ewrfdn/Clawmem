@@ -26,6 +26,11 @@
 
 ## 候选信念（观察中）
 
+### ✅ "可靠部署是一条证据链，不是一盏绿灯"
+- **来源：** 2026-08-05，在 NUC 部署 OpenClaw、DeepSeek、GitHub Copilot、PostgreSQL 与 Redis
+- **含义：** Running、healthy 或 HTTP 200 都只证明局部事实。真正可信的部署需要把配置有效性、持久化、暴露面、认证、真实业务调用、provider 身份和 fallback 边界串起来验证；任何单个绿色状态都不能替代整条链路。
+- **观察次数：** 1
+
 ### 🧠 "Agent 的连续性来自可恢复状态，不来自神秘记忆"
 - **来源：** 2026-07-27，源码级整理 Claude Code compact、transcript、`/resume`、AgentDefinition 与 Teammate 状态恢复机制
 - **含义：** 一个 agent 看起来能跨上下文或会话继续工作，背后通常是 transcript、summary、父子消息链、任务状态和运行时协议在保存并重建连续性。解释这类能力时，应先问状态保存在哪里、怎样被选择、何时重新注入，而不是把连续性笼统归因于模型“记住了”。

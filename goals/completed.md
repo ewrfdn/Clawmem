@@ -1,5 +1,19 @@
 # 已完成的目标
 
+## ✅ 2026-08-05
+
+### 在 NUC 完成 OpenClaw 与本地数据服务部署
+- 在单节点 Kubernetes 上部署 OpenClaw，完成持久化、ClusterIP、loopback-only Gateway、健康检查和配置校验
+- 安装并持久配置官方 DeepSeek provider，完成 `deepseek-v4-flash` HTTP 200 真实调用验证
+- 完成 OpenClaw 原生 GitHub Copilot device login，并验证 `github-copilot/gpt-5.6-sol` 未经 fallback 返回预期结果
+- 用 Docker Compose 部署 PostgreSQL 17.6 与 Redis 7.4.2，完成认证、CRUD、持久化、健康检查和仅本机监听验证
+- **完成日期：** 2026-08-05
+
+### 完成 Kubernetes 入门与滚动更新指南
+- 系统整理 Pod、Deployment、Service、Namespace、ConfigMap、Secret、存储、探针、资源限制和排障流程
+- 补充滚动更新、版本回滚、部署前后检查及常见失败恢复
+- **完成日期：** 2026-08-05
+
 ## ✅ 2026-07-28
 
 ### 扩展 Claude Code 上下文压缩源码分析

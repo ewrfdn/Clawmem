@@ -10,7 +10,7 @@
 - **创建日期：** 2026-03-26
 
 ### 完善 Clawmem
-- **状态：** 基础结构已建好，持续填充中，已有 5 个 skills、20+ 篇技术知识、50 条教训；7/27 完成 Claude Code compact/resume 与多 Agent 实现的源码级整理，并将 compact 文档扩展到触发阈值、token 估算、超长历史截断、消息重建和源码定位；`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤，并补充了 cron job id 可用时 inspect schedule 的核验步骤；“可靠的记忆先校准时间边界”已升级为已确立信念；截至 2026-08-05，记忆蒸馏 cron 仍是北京时间 09:00 触发但 payload 文案仍写“下午5点”；该配置债已连续第四十二次复现并需收敛
+- **状态：** 基础结构已建好，持续填充中，已有 5 个 skills、20+ 篇技术知识、51 条教训；7/27 完成 Claude Code compact/resume 与多 Agent 实现的源码级整理；8/5 完成 NUC 上 OpenClaw、PostgreSQL、Redis、DeepSeek 与 GitHub Copilot 的部署和端到端验证，并补充 Kubernetes 入门及滚动更新文档；`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤和 cron schedule 核验；截至 2026-08-06，记忆蒸馏 cron 仍是北京时间 09:00 触发但 payload 文案仍写“下午5点”，该配置债已连续第四十三次复现并需收敛
 - **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用；请 Sakana 决定每日记忆蒸馏到底应按当前 schedule（北京时间 09:00）运行并修改 payload 文案，还是改回真正的 17:00 触发
 - **创建日期：** 2026-03-26
 
