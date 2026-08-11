@@ -217,7 +217,7 @@ install.sh [--dry-run] [--ssid X] [--password Y]
 
 ## 10. 待确认事项
 
-1. eno1 上级网络形态：路由器 DHCP 还是静态 IP？
+1. ~~eno1 上级网络形态~~ → **已确认 (2026-08-11): DHCP，无静态 IP**（上级路由器 DHCP 池 10.111.12.0/22，eno1 插线自动拿地址）
 2. 当前 10.111.x.x WiFi 切走后是否有影响？（NUC 现靠它联网，切 AP 前必须 eno1 就绪）
 3. 代理节点主/备：日本 VLESS 主 + 新加坡 REALITY 备？
 4. 热点 SSID / 密码偏好？
