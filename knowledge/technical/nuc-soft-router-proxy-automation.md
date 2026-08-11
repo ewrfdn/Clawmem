@@ -136,6 +136,21 @@ ip rule add fwmark 1 table 100
 ip route add local 0.0.0.0/0 dev lo table 100
 ```
 
+### 4.6 代理开关机制（WebUI 实时切换）
+
+“是否启用代理”通过 **nftables 规则原子切换**实现，不重启防火墙：
+
+- **启用**: `nft -f` 加载 TPROXY 劫持规则（lan 流量 → xray tproxy 12345）
+- **禁用**: `nft -f` 移除劫持规则（lan 流量 → 直连 NAT 出网），xray 服务可保持运行或随机关闭
+- 切换脚本: `/usr/local/bin/router-proxy-toggle.sh [on|off]`，写入状态到 `/etc/router-webui/state/proxy`（WebUI 读取显示）
+- 安全: 切换前备份当前 nft 规则集，失败自动还原
+
+### 4.7 Xray 客户端配置由 WebUI 管理
+
+- Xray 出站配置模板 `/etc/xray/client.json` 由 WebUI 表单生成（不再手改）
+- 保存流程: 表单 → JSON 模板渲染 → `xray run -test -config` 校验 → 备份旧配置 → 写入 + `systemctl reload xray-proxy`
+- 支持多节点（主/备），WebUI 一键切换当前激活节点
+
 ## 5. WebUI 设计
 
 ### 5.1 技术选型
@@ -151,6 +166,11 @@ ip route add local 0.0.0.0/0 dev lo table 100
 | GET | `/api/status` | 总览: WAN IP、AP 状态、xray 状态、流量 |
 | GET | `/api/clients` | 当前连接客户端列表（`iw dev wlp0s20f3 station dump`） |
 | GET/POST | `/api/config/hotspot` | 查看/修改 SSID、密码、信道（改后自动重启 hostapd） |
+| **GET** | **`/api/proxy`** | **代理总览: 启用状态、当前节点、节点列表** |
+| **POST** | **`/api/proxy/toggle`** | **代理总开关 on/off（nftables 原子切换）** |
+| **PUT** | **`/api/proxy/config`** | **保存 Xray 节点配置（校验→备份→reload）** |
+| **POST** | **`/api/proxy/node/{id}/activate`** | **切换主/备节点** |
+| **POST** | **`/api/proxy/test`** | **测试当前节点连通性（curl 经代理出口 IP）** |
 | POST | `/api/node/switch` | 切换代理节点（日本/新加坡，重载 xray） |
 | POST | `/api/service/{name}/restart` | 重启指定服务 |
 | GET | `/api/logs/{service}` | 查看服务日志（journalctl 尾部） |
@@ -159,7 +179,16 @@ ip route add local 0.0.0.0/0 dev lo table 100
 
 ### 5.3 页面
 
-单页 `index.html`：状态卡片（WAN/AP/代理/客户端数）、节点切换按钮、热点配置表单、日志滚动查看、备份/回滚按钮。深色主题，手机可访问（WebUI 自己暴露在 WAN 或仅 LAN——默认仅 LAN + 可选 token 认证）。
+单页 `index.html`，左侧导航三个标签页：
+
+1. **状态**：状态卡片（WAN/AP/代理/客户端数）、客户端列表、备份/回滚按钮
+2. **代理设置**：
+   - 总开关（是否启用代理，switch 控件，调 `/api/proxy/toggle`）
+   - 节点列表（主/备），显示当前激活节点、一键切换、一键测速
+   - 节点编辑表单：协议（VLESS/VMess/REALITY）、地址、端口、UUID、TLS/SNI、WS 路径、伪装 host、REALITY publicKey/shortId 等；保存时后端校验 JSON + 测试 + reload
+3. **热点设置**：SSID/密码/信道表单 + 日志滚动查看
+
+深色主题，手机可访问（WebUI 自己暴露在 WAN 或仅 LAN——默认仅 LAN + 可选 token 认证）。
 
 ## 6. 一键部署 (`install.sh`)
 
