@@ -151,6 +151,29 @@ ip route add local 0.0.0.0/0 dev lo table 100
 - 保存流程: 表单 → JSON 模板渲染 → `xray run -test -config` 校验 → 备份旧配置 → 写入 + `systemctl reload xray-proxy`
 - 支持多节点（主/备），WebUI 一键切换当前激活节点
 
+### 4.8 订阅导入（Clash YAML 解析）
+
+WebUI 支持从**订阅链接**导入节点（如 `https://bocchi.japaneast.cloudapp.azure.com/sub/clash.yaml`），也支持直接粘贴 YAML 文本。
+
+**流程**: URL/文本 → 拉取 → 解析 YAML → 提取 `proxies:` → 转换成 Xray outbound JSON → 预览（可选节点）→ 确认导入 → 校验 + 备份 + reload
+
+**Clash → Xray 映射表**:
+
+| Clash type | Xray outbound | 说明 |
+|---|---|---|
+| `vless` | vless | 需 settings.vnext + streamSettings |
+| `vmess` | vmess | 同上 |
+| `ss` | shadowsocks | 支持 |
+| `trojan` | trojan | 支持 |
+| `hysteria2` | hysteria2 | Xray ≥1.8 支持 |
+| `ssr` / `tuic` | ❌ 不支持 | Xray 无此协议，跳过并在预览中标注提示 |
+
+**关键字段映射**（以 vless 为例）: `name→tag`, `server→address`, `port→port`, `uuid→id`, `network(ws/grpc/tcp)→streamSettings.network`, `ws-opts.path→wsSettings.path`, `ws-opts.headers.Host→wsSettings.headers.Host`, `tls:true→security=tls + servername`, `reality(publicKey/shortId/fingerprint)→REALITY 参数`
+
+**订阅管理**: 订阅 URL 存 `/etc/router-webui/subscriptions.json`，支持手动刷新；可加 cron 定时刷新节点列表。
+
+**安全**: 仅允许 http/https URL（SSRF 防护：拒绝内网/保留地址），响应大小限制（如 2MB），解析失败返回具体错误行；导入前必须预览确认，不自动覆盖当前节点。
+
 ## 5. WebUI 设计
 
 ### 5.1 技术选型
@@ -171,6 +194,12 @@ ip route add local 0.0.0.0/0 dev lo table 100
 | **PUT** | **`/api/proxy/config`** | **保存 Xray 节点配置（校验→备份→reload）** |
 | **POST** | **`/api/proxy/node/{id}/activate`** | **切换主/备节点** |
 | **POST** | **`/api/proxy/test`** | **测试当前节点连通性（curl 经代理出口 IP）** |
+| **POST** | **`/api/subscription`** | **添加订阅 URL** |
+| **GET** | **`/api/subscription`** | **列出订阅 + 各订阅节点数** |
+| **POST** | **`/api/subscription/{id}/refresh`** | **重新拉取订阅** |
+| **DELETE** | **`/api/subscription/{id}`** | **删除订阅** |
+| **POST** | **`/api/proxy/import`** | **导入（URL 或粘贴 YAML），返回节点预览** |
+| **POST** | **`/api/proxy/import/confirm`** | **确认导入选中节点 → 写入 xray 配置** |
 | POST | `/api/node/switch` | 切换代理节点（日本/新加坡，重载 xray） |
 | POST | `/api/service/{name}/restart` | 重启指定服务 |
 | GET | `/api/logs/{service}` | 查看服务日志（journalctl 尾部） |
@@ -184,6 +213,7 @@ ip route add local 0.0.0.0/0 dev lo table 100
 1. **状态**：状态卡片（WAN/AP/代理/客户端数）、客户端列表、备份/回滚按钮
 2. **代理设置**：
    - 总开关（是否启用代理，switch 控件，调 `/api/proxy/toggle`）
+   - **订阅导入区块**：订阅 URL 输入框 + 「拉取」→ 节点预览列表（checkbox 勾选 + 协议标注，不支持的协议灰色提示）→ 「导入选中」；已存订阅列表带刷新/删除按钮
    - 节点列表（主/备），显示当前激活节点、一键切换、一键测速
    - 节点编辑表单：协议（VLESS/VMess/REALITY）、地址、端口、UUID、TLS/SNI、WS 路径、伪装 host、REALITY publicKey/shortId 等；保存时后端校验 JSON + 测试 + reload
 3. **热点设置**：SSID/密码/信道表单 + 日志滚动查看
@@ -243,6 +273,7 @@ install.sh [--dry-run] [--ssid X] [--password Y]
 - [ ] **Phase 3**: systemd 服务化 + watchdog + 一键部署脚本
 - [ ] **Phase 4**: WebUI（状态/切节点/改热点/日志/备份回滚）
 - [ ] **Phase 5**: 打磨（流量统计、客户端限速、多 SSID、访客网络隔离）
+- [ ] **Phase 6**: 订阅自动刷新（cron 定时拉取订阅更新节点列表）
 
 ## 10. 待确认事项
 
