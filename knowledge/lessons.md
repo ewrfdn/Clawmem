@@ -72,4 +72,5 @@
 48. **Agent 流水线要把可验证结构留在 LLM 外** — OpenCodeReview 的可靠性不来自把整份 Diff 交给一个更长 Prompt，而来自单文件边界、确定性 Diff 解析与行号映射、有界工具循环、预算控制、Session 记录和保守事实核查。路径、状态、资源和可机械验证的约束应由代码负责，LLM 只处理真正需要语义判断的部分（2026-07-24）
 49. **上下文压缩不等于删除历史** — Claude Code compact 会把 summary 作为带 `isCompactSummary` 标记的特殊 user message，与 `compact_boundary` 一起追加到原 session JSONL；旧消息通常仍在磁盘 transcript 中，只是不再默认进入 active model context。分析“模型还记得什么”时，要区分持久化历史、当前消息链和实际发送给 API 的上下文切片（2026-07-27）
 50. **Agent 定义的发现、暴露与执行是三个阶段** — `.claude/agents/*.md` 被扫描后，主 Agent 通常先看到 name、description、工具等 metadata；完整正文在真正 spawn 时才成为子 Agent 的 system prompt。定义文件存在不会自动启动 Agent，运行中修改还可能受 discovery memoize 缓存影响（2026-07-27）
-51. **部署验收不能停在“进程健康”** — Pod Running、容器 healthy 和 `/healthz` 200 只能证明本地生命体征；外部 provider 还要发起真实请求，并检查响应中的 provider/model 元数据以排除 fallback。数据库也要同时验证认证成功路径、未认证拒绝、CRUD、监听范围和重启策略，才能形成端到端证据链（2026-08-05）
+51. **部署验收不能停在"进程健康"** — Pod Running、容器 healthy 和 `/healthz` 200 只能证明本地生命体征；外部 provider 还要发起真实请求，并检查响应中的 provider/model 元数据以排除 fallback。数据库也要同时验证认证成功路径、未认证拒绝、CRUD、监听范围和重启策略，才能形成端到端证据链（2026-08-05）
+52. **不同 API 网关的模型命名格式不同** — 同一模型在 ark 和 dashscope 可能需要不同命名格式（如 MiniMax 在 dashscope 必须用 `MiniMax/MiniMax-M3` 带前缀和正确大小写，裸名 `minimax-m3` → 400 Access denied）；跨 provider 测试前先查命名规范，不要把一家 agent 的命名经验直接搬到另一家（2026-08-25）
