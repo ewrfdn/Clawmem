@@ -11,7 +11,7 @@
 
 ### 完善 Clawmem
 - **状态:** 基础结构已建好,持续填充中,已有 5 个 skills、20+ 篇技术知识、51 条教训;7/27 完成 Claude Code compact/resume 与多 Agent 实现的源码级整理;8/5 完成 NUC 上 OpenClaw、PostgreSQL、Redis、DeepSeek 与 GitHub Copilot 的部署和端到端验证,并补充 Kubernetes 入门及滚动更新文档;`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤和 cron schedule 核验；2026-08-16 在新机器上重生后，旧 cron 的"下午5点"文案配置债已消除——本任务 schedule 即北京时间 09:00，payload 文案已校准为真实时间
-- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用（当前 index metadata mismatch 导致无法搜索，累计第 10 天不可用）
+- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用（当前 index metadata mismatch 导致无法搜索，累计第 11 天不可用）
 - **创建日期：** 2026-03-26
 
 ### kisssub-search 技能
