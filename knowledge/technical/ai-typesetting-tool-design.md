@@ -46,7 +46,42 @@ AI → 图层树 JSON（受 schema 约束）→ 渲染器(纯函数,HTML/CSS) �
 - 纯函数 `render(layerTree) → htmlString`，确定性、无框架依赖、浏览器+Node 双跑
 - 每图层 → position:absolute div，z-index 按数组序
 - 映射：fill→background-image / background-clip:text；blendMode→mix-blend-mode
-- 图层树可 diff → 增量更新 + undo/redo
+- group → 嵌套 div + 相对坐标
+- 编辑态：拆单图层函数 renderLayerElement/renderLayerStyle 供实例层挂载/重算
+
+## 编辑内核（v2，2026-09-11）
+
+### 架构：数据流驱动，每帧走数据
+
+```
+手势层(事件委托+hit-test) → 改实例数据 → 实例层(id↔element 绑定+Proxy) → 同步层(属性→CSS 单点 patch)
+```
+
+- **实例层**：`Map<layerId, {data(响应式), el, children}>`，layer id ↔ DOM element 一一绑定
+- **响应式**：Proxy 拦截 set → `syncStyle(id, key, value)` 定向同步（x→left, y→top, width, height, opacity, zIndex, visible→display；视觉类→重算该元素 style）
+- **三种变更**：属性级（Proxy→单属性更新，最频繁）/ 结构级（局部 insert/remove/排序）/ 全量 render（初始化/导入/导出才用）
+- **比 vdom 更轻**：vdom 是"不知道哪变了 diff 整棵"，本方案"知道改哪个 layer 哪个属性，直接 patch"
+- 拖动中每帧改数据（60fps），松手提交 undo（命令式 delta {layerId, prop, before, after}，恢复也走数据流）
+
+### 坐标系与 group 嵌套
+
+- **存储/渲染都用相对直接父坐标**：`layer.x/y` 始终相对画布或直接父 group
+- **渲染嵌套 DOM**（group 必嵌套）：CSS absolute 天然相对最近 positioned ancestor，零换算；拖 group 浏览器自动跟随子层
+- **不扁平化**：扁平化才需逐层累加成画布绝对坐标，拖 group 要重算全部子层
+- **坐标工具函数族**：toAbsolute / toParent / hitTest（编辑与 group 转换共用）
+- **ungroup**：子层新坐标 = 父 group 坐标 + 子层相对坐标（例：image(15,15) 相对 B，B(50,50) 相对 A → 相对 A=(65,65)）
+- **group**：子层新坐标 = 子层相对父坐标 − 目标 group 相对父坐标（例：C(100,100) 相对 A，D(40,40) 相对 A → C 相对 D=(60,60)）
+- **多层级递归**：每提升/下降一层加减一次父坐标；转换目标是"新父级相对坐标"非画布绝对坐标
+- **v1 限制**：group 自身不做 transform（rotate/scale 只允许叶子图层），绕开变换矩阵复杂度
+
+### UI 交互层
+
+- **不逐元素绑事件**：canvas 容器事件委托（pointerdown/move/up）+ hitTest 按图层树几何计算命中（透明像素穿透/嵌套/zIndex 可控），不依赖 event.target
+- **overlay 层**：选中框/8 resize 手柄/旋转手柄/参考线画在独立浮层，不污染真实图层 DOM
+- **手势状态机**：pointerdown 判定手势类型 → pointermove 每帧改数据 → pointerup 提交 undo（一次手势一条干净 diff）
+- **图层面板**：树形展示（group 可折叠）、选中双向联动、增删/排序/显隐/混合模式/透明度
+- **属性面板**：编辑 x/y/宽/高/颜色/字号 → 同一数据流（改数据=DOM 同步）
+- **undo/redo**：命令式 delta 栈（100 条），结构级操作记录结构 diff
 
 ## 关键技术点
 
@@ -66,17 +101,19 @@ background-clip: text;
 
 ## 里程碑
 
-- M1: schema + 渲染器骨架（rect/text/image/group）→ 独立 npm 包雏形
-- M2: 浏览器实时预览 + diff 更新 + undo
+- M1: schema（已定稿）+ 渲染器骨架 → 独立 npm 包雏形
+- M2: **编辑内核**：实例层 + 数据流驱动 + 坐标工具 + undo → 可交互 demo（选中/拖动/resize）
 - M3: 导出管线（PNG/PDF）+ 超大字号/渐变验证
 - M4: AI 接入（LLM 函数调用 → 图层树）
-- M5: 图层面板 UI
+- M5: UI 完善：图层面板、属性面板、group/ungroup、对齐参考线/吸附
 
 ## 风险与对策
 
 - AI 直接写 HTML 失控 → 只出受约束图层树
 - 排版不可预测 → 白名单 + schema 校验 + 确定性渲染
+- 编辑时全量重建卡顿 → 数据流驱动 + 定向同步，拖动中只改单元素 style
 - 大文件内存爆炸 → scale 替代超大字号 + 受控超采样
+- group 嵌套坐标混乱 → 相对坐标存储 + 嵌套 DOM 渲染，group/ungroup 只做一次坐标换算
 - 与 CreatiPoster 重复 → 差异化：通用 LLM + 独立库 + 自托管轻量
 - 字体版权 → 自托管字体子集化
 
