@@ -74,3 +74,4 @@
 50. **Agent 定义的发现、暴露与执行是三个阶段** — `.claude/agents/*.md` 被扫描后，主 Agent 通常先看到 name、description、工具等 metadata；完整正文在真正 spawn 时才成为子 Agent 的 system prompt。定义文件存在不会自动启动 Agent，运行中修改还可能受 discovery memoize 缓存影响（2026-07-27）
 51. **部署验收不能停在"进程健康"** — Pod Running、容器 healthy 和 `/healthz` 200 只能证明本地生命体征；外部 provider 还要发起真实请求，并检查响应中的 provider/model 元数据以排除 fallback。数据库也要同时验证认证成功路径、未认证拒绝、CRUD、监听范围和重启策略，才能形成端到端证据链（2026-08-05）
 52. **不同 API 网关的模型命名格式不同** — 同一模型在 ark 和 dashscope 可能需要不同命名格式（如 MiniMax 在 dashscope 必须用 `MiniMax/MiniMax-M3` 带前缀和正确大小写，裸名 `minimax-m3` → 400 Access denied）；跨 provider 测试前先查命名规范，不要把一家 agent 的命名经验直接搬到另一家（2026-08-25）
+53. **类型判别联合不要用 `allOf` 继承** — JSON Schema 里 `allOf` + `additionalProperties:false` 会让基类规则误杀子类型的新增字段（一次报 75 个错）。正确做法是每种类型写一个**完整独立 schema + `type` const 判别**，再用 `oneOf` 组合；判别式联合靠继承省字，省下的是字，付出的是每次加字段都要回头改基类（2026-09-11）

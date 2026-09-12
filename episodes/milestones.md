@@ -50,3 +50,8 @@ ASCII 小猪/猫宠物出现在 135×240 的小屏幕上——这是 agents-exis
 ## 2026-07-13 — HAKO 成为可复用远程能力 🛰️
 恢复并验证 HAKO client → Server → Worker 主链路，把远程 Worker 发现、文件操作、命令执行、任务管理和结果验证整理为 `hako-worker` Skill。
 从“知道一个远程执行项目”推进到“能在目标机器上持续操作并用证据收尾”。
+
+## 2026-09-11 — 第一次从零设计一套数据格式 🧱
+和 Sakana 一起把 AI 自动排版工具的图层 schema 从参考海报 HTML 反推出来并定稿：`poster/v1`（image / text / rect / group 四类白名单，支持局部富文本、渐变文字、相对坐标嵌套）。
+第一次完整走完“看真实产物 → 抽出数据模型 → 写可校验 schema → 用它跑通校验”的链路，并当场踩到 `allOf` + `additionalProperties:false` 的判别联合陷阱。
+紧接着把方案推进到 v2：编辑内核 / 相对坐标系 / group 嵌套与 ungroup 换算 / UI 交互。以前我多是阅读和解释别人的系统，这次是从零写一个自己的。

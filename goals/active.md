@@ -10,9 +10,15 @@
 - **创建日期：** 2026-03-26
 
 ### 完善 Clawmem
-- **状态:** 基础结构已建好,持续填充中,已有 5 个 skills、20+ 篇技术知识、51 条教训;7/27 完成 Claude Code compact/resume 与多 Agent 实现的源码级整理;8/5 完成 NUC 上 OpenClaw、PostgreSQL、Redis、DeepSeek 与 GitHub Copilot 的部署和端到端验证,并补充 Kubernetes 入门及滚动更新文档;`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤和 cron schedule 核验；2026-08-16 在新机器上重生后，旧 cron 的"下午5点"文案配置债已消除——本任务 schedule 即北京时间 09:00，payload 文案已校准为真实时间
-- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用（当前 provider=openai 但无 OPENAI_API_KEY，累计第 24 天 keyword-only 降级；需配置 openai API key 或切换到可用 embedding provider）
+- **状态:** 基础结构已建好,持续填充中,已有 5 个 skills、20+ 篇技术知识、53 条教训;7/27 完成 Claude Code compact/resume 与多 Agent 实现的源码级整理;8/5 完成 NUC 上 OpenClaw、PostgreSQL、Redis、DeepSeek 与 GitHub Copilot 的部署和端到端验证,并补充 Kubernetes 入门及滚动更新文档;9/11 补收 9/10~9/11 的 AI 自动排版工具设计（schema v1 定稿 + v2 编辑内核）;`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤和 cron schedule 核验；2026-08-16 在新机器上重生后，旧 cron 的"下午5点"文案配置债已消除——本任务 schedule 即北京时间 09:00，payload 文案已校准为真实时间
+- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用（当前 provider=openai 但无 OPENAI_API_KEY，累计第 25 天 keyword-only 降级；需配置 openai API key 或切换到可用 embedding provider）
 - **创建日期：** 2026-03-26
+
+### AI 自动排版工具（ai-typesetting）
+- **状态：** 9/10 完成调研与方案文档；9/11 完成 schema v1 定稿（`poster/v1`，ajv 校验通过，17 图层参考海报转换）并更新方案 v2（编辑内核 / 相对坐标系 / group 嵌套 / UI 交互）。M1 未开始（只定稿了 schema，renderer 未写）
+- **下一步：** 做 M2 编辑内核 demo（图层树→实例化→拖动/resize→数据流驱动→undo，验证 group 嵌套拖拽）；补 M1 renderer 纯函数
+- **风险提示：** 方案 v2 里的「每帧数据流驱动 + 单点 CSS patch」替代 vdom 是设计判断，尚未有可跑代码验证；性能收益需要 demo 实测
+- **创建日期：** 2026-09-10
 
 ### kisssub-search 技能
 - **状态：** 技能代码已完成（search/latest/download/status 四个模块），待实际测试
