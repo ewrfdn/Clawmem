@@ -11,8 +11,13 @@
 
 ### 完善 Clawmem
 - **状态:** 基础结构已建好,持续填充中,已有 5 个 skills、20+ 篇技术知识、53 条教训;7/27 完成 Claude Code compact/resume 与多 Agent 实现的源码级整理;8/5 完成 NUC 上 OpenClaw、PostgreSQL、Redis、DeepSeek 与 GitHub Copilot 的部署和端到端验证,并补充 Kubernetes 入门及滚动更新文档;9/11 补收 9/10~9/11 的 AI 自动排版工具设计（schema v1 定稿 + v2 编辑内核）;`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤和 cron schedule 核验；2026-08-16 在新机器上重生后，旧 cron 的"下午5点"文案配置债已消除——本任务 schedule 即北京时间 09:00，payload 文案已校准为真实时间
-- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用（当前 provider=openai 但无 OPENAI_API_KEY，累计第 25 天 keyword-only 降级；需配置 openai API key 或切换到可用 embedding provider）
+- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用（当前 provider=openai 但无 OPENAI_API_KEY，累计第 26 天 keyword-only 降级；需配置 openai API key 或切换到可用 embedding provider）
 - **创建日期：** 2026-03-26
+
+### Widget sandbox 端到端验证（Control UI widget 渲染）
+- **状态：** 09-12 定位并完成本机侧修复（根因：`mcp.apps` 未启用 → dedicated-origin 沙箱宿主没起）。配置已写入、gateway 已于 09-12 19:14 重启、18790 已在监听 ✅
+- **下一步：** 需 Sakana 在 Azure NSG 放行公网 18443（本机无 az CLI）；放行后验证 Control UI 聊天内 widget 真实渲染。**在放行前不要把此项记为已完成**——当前只证明了「配置生效 + 进程监听」，未证明「公网可达 + 真实渲染」
+- **创建日期：** 2026-09-12
 
 ### AI 自动排版工具（ai-typesetting）
 - **状态：** 9/10 完成调研与方案文档；9/11 完成 schema v1 定稿（`poster/v1`，ajv 校验通过，17 图层参考海报转换）并更新方案 v2（编辑内核 / 相对坐标系 / group 嵌套 / UI 交互）。M1 未开始（只定稿了 schema，renderer 未写）

@@ -75,3 +75,4 @@
 51. **部署验收不能停在"进程健康"** — Pod Running、容器 healthy 和 `/healthz` 200 只能证明本地生命体征；外部 provider 还要发起真实请求，并检查响应中的 provider/model 元数据以排除 fallback。数据库也要同时验证认证成功路径、未认证拒绝、CRUD、监听范围和重启策略，才能形成端到端证据链（2026-08-05）
 52. **不同 API 网关的模型命名格式不同** — 同一模型在 ark 和 dashscope 可能需要不同命名格式（如 MiniMax 在 dashscope 必须用 `MiniMax/MiniMax-M3` 带前缀和正确大小写，裸名 `minimax-m3` → 400 Access denied）；跨 provider 测试前先查命名规范，不要把一家 agent 的命名经验直接搬到另一家（2026-08-25）
 53. **类型判别联合不要用 `allOf` 继承** — JSON Schema 里 `allOf` + `additionalProperties:false` 会让基类规则误杀子类型的新增字段（一次报 75 个错）。正确做法是每种类型写一个**完整独立 schema + `type` const 判别**，再用 `oneOf` 组合；判别式联合靠继承省字，省下的是字，付出的是每次加字段都要回头改基类（2026-09-11）
+54. **"配置生效"不等于"端到端可用"，修复要做证据分层** — Widget sandbox 修复里，`mcp.apps.enabled` 写进配置 ✅、gateway 重启 ✅、18790 在监听 ✅，但公网 18443 仍被 Azure NSG 挡着、真实 widget 渲染未验证 ❌。一个已改本机、只差最后一段的问题，最容易被自己记成"修好了"。要把「配置生效 / 进程监听 / 公网可达 / 真实业务渲染」四层分别标注，不让后两项借前两项的光（2026-09-12）
