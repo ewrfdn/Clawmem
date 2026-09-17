@@ -16,6 +16,7 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
 ## Inputs
 
 - `workspace/memory/YYYY-MM-DD.md`：按 Reference UTC + 用户时区校准后的今天和昨天日记；如果今天不存在，至少读取昨天
+- `sessions_list`（含 `includeLastMessage`）：**当天实际发生的真人交互**。日记只记录我写下了什么，不记录人类什么时候来问过什么；只读日记会把有真实交互的日子误判成安静维护日
 - `Clawmem/`：长期记忆仓库
 - `about-bocchi/`：自传仓库
 - 可选：cron job id（通常在触发消息前缀里）；如果时间文案与 Reference UTC 不一致，用 `cron get`/等价方式读取真实 `schedule.expr` 和 `tz`
@@ -27,6 +28,7 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
    - 先核对任务提供的 Reference UTC、用户时区（Sakana 默认 Asia/Shanghai）和提示文案中的本地时间；如果不一致，明确记录，不要盲信“今天/昨天”。
    - 如果触发消息带 cron job id，优先 inspect job 的 `schedule.expr` 与 `tz`：真实触发时间以 schedule 为准，payload 文案可能过期。不要在未核对 schedule 前断言 cron 跑错。
    - 按校准后的日期窗口读取今天和昨天的 workspace 日记；如果今天不存在，记录为“本轮开始时不存在”。
+   - **不要只读日记**：再用 `sessions_list` 扫同一窗口内非 cron 的会话（`kind` 为 `main`/`other`、parent 为 main），按 `updatedAt` 比对窗口。日记没写的人类交互、其他 session 的真实产出都算本轮输入；判“安静维护日”之前必须先跑这一步。
    - 如涉及 prior work / decisions / dates / people / todos，先尝试 `memory_search`。
    - 如果 `memory_search` 不可用，记录原因，并改用日记文件与仓库直接检查。
 
@@ -36,12 +38,13 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
    - 不要覆盖未提交的人类改动；发现冲突或脏状态时先说明并停止相关写入。
 
 3. **更新 Clawmem 层级**
-   - `episodes/YYYY-MM/`：记录具体事件或重要空转判断。
+   - `episodes/YYYY-MM/`：记录具体事件或重要空转判断。**写入前自检**：`ls episodes/YYYY-MM/` 的最后一项日期应 ≥ 上一轮的蒸馏对象日期（等价地：应有上一轮执行日那天的 episode）。对不上就补收，然后再写本轮——不要把这条规则只写进日记，它必须在这里每次都跑。
    - `episodes/milestones.md`：只有真正里程碑才追加。
    - `knowledge/lessons.md`：新增可复用教训，保持可追溯日期。
    - `identity/beliefs.md`：只有从多次经验中长出的稳定判断，才作为候选信念。
    - `relationships/*.md`：只更新与人的互动模式，不泄露不该公开的私密内容。
    - `goals/active.md` / `goals/completed.md`：同步目标状态，不虚构完成项。
+   - **核查“某类东西齐了吗”时，先把入口列表本身列为待验证对象**：技能不只在 `Clawmem/skills/`（agent 的 `workshop-skills/` 可能不在任何 git 仓库），进展不只在上一轮文本里（要在上游仓库回填）。入口漏了，结论就会跟着漏。
 
 4. **更新 about-bocchi**
    - 只有有里程碑或值得长期记住的感悟时，追加自传片段。
