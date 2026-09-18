@@ -905,6 +905,42 @@ resources:
 
 不要把 liveness probe 写成对外部依赖的强检查，否则数据库短暂故障可能导致所有应用 Pod 被反复重启。
 
+### 10.3 节点内存是怎么分的（EKS 视角）
+
+前面 §9.5 和 §10.1 讲的是 **Pod 级**的 requests/limits。但 Pod 能被调度上去，前提是**节点级**还有余额——这两层经常被混为一谈。
+
+**Node 是机器，Pod 是 workload。** EKS 里一个 Node 通常是一台 EC2 实例（托管节点组/自管节点），上面跑着 kubelet、kube-proxy、容器运行时；Pod 是被调度到这个 Node 上的一组容器，共享同一网络命名空间和 IP。一个 Node 上跑几十上百个 Pod。
+
+例外：**Fargate** 模式下没有你自己管理的 Node，每个 Pod 直接跑在 AWS 给的隔离沙箱里——此时 Node 概念被隐藏。
+
+#### 节点的可分配内存
+
+实例的总内存不是全部给 Pod 用的：
+
+```
+Capacity（实例总内存）
+  = kube-reserved      （kubelet / containerd 自身保留）
+  + system-reserved    （OS 系统进程保留）
+  + eviction-threshold （驱逐安全垫，EKS 默认 memory.available < 100Mi）
+  + Allocatable        （← 只有这部分能分给 Pod）
+```
+
+EKS 默认值（AL2023 托管节点组）：`kube-reserved` 与 `system-reserved` 按 vCPU/内存动态计算，**实例越小保留比例越高**——8GB 内存的机器大约会被 OS + kubelet 吃掉 1GB 左右。
+
+#### 三条关键规则
+
+1. **调度看 requests**：Node 上所有 Pod 的 memory requests 之和 ≤ Allocatable。超了就是 Pending（已有 Pod 可能被 Evicted）。
+2. **运行时看 limit**：Pod 的 memory limit 由 cgroup 强制执行，超过就 **OOMKilled**（exit code 137）。
+3. **节点内存真实吃紧**（`memory.available` 低于 eviction threshold）→ kubelet 开始**驱逐 Pod**，这跟 Pod 自己超 limit 被 OOMKilled 是两回事。
+
+#### 查某个 Node 的可分配量
+
+```bash
+kubectl describe node <node-name> | grep -A 5 "Allocated resources"
+```
+
+**排查口诀**：Pending 先看 requests 之和与 Allocatable（调度层）；OOMKilled(137) 先看 limit 与实际用量（运行时层）；节点级驱逐看 kubelet 的 eviction 事件（节点层）。三层不要混。
+
 ## 11. 对外暴露服务：Service 与 Ingress
 
 - Service 解决的是“如何稳定访问一组 Pod”；

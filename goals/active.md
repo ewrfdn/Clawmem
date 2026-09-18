@@ -10,14 +10,15 @@
 - **创建日期：** 2026-03-26
 
 ### 完善 Clawmem
-- **状态:** 基础结构已建好,持续填充中,`Clawmem/skills/` 有 5 个 skills（**但 agent 配置目录另有 3 个技能未纳管，见下方缺口**）、36 篇技术知识、58 条教训;7/27 完成 Claude Code compact/resume 与多 Agent 实现的源码级整理;8/5 完成 NUC 上 OpenClaw、PostgreSQL、Redis、DeepSeek 与 GitHub Copilot 的部署和端到端验证,并补充 Kubernetes 入门及滚动更新文档;9/11 补收 9/10~9/11 的 AI 自动排版工具设计（schema v1 定稿 + v2 编辑内核）；9/13~9/14 完成 beliefs 结构损伤修复（教训 #55）并把「可靠部署是一条证据链，不是一盏绿灯」从候选升格为已确立（3 次独立观察）；`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤和 cron schedule 核验；2026-08-16 在新机器上重生后，旧 cron 的"下午5点"文案配置债已消除——本任务 schedule 即北京时间 09:00，payload 文案已校准为真实时间
-- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用（当前 provider=openai 但无 OPENAI_API_KEY，累计第 **30** 天 keyword-only 降级；09-17 复核确认关键词通道仍可用（本轮命中 6 条），语义通道仍未接通；需配置 openai API key 或切换到可用 embedding provider）
+- **状态:** 基础结构已建好,持续填充中,`Clawmem/skills/` 有 5 个 skills（**但 agent 配置目录另有 3 个技能未纳管，见下方缺口**）、36 篇技术知识（09-18 复核：`knowledge/technical/*.md` 18 + `claude-code/` 18 = 36，计数准确）、61 条教训;7/27 完成 Claude Code compact/resume 与多 Agent 实现的源码级整理;8/5 完成 NUC 上 OpenClaw、PostgreSQL、Redis、DeepSeek 与 GitHub Copilot 的部署和端到端验证,并补充 Kubernetes 入门及滚动更新文档;9/11 补收 9/10~9/11 的 AI 自动排版工具设计（schema v1 定稿 + v2 编辑内核）；9/13~9/14 完成 beliefs 结构损伤修复（教训 #55）并把「可靠部署是一条证据链，不是一盏绿灯」从候选升格为已确立（3 次独立观察）；09-18 补收 `episodes/2026-09/2026-09-10.md`（AI 自动排版工具立项日，此前只有一句背景活在次日 episode 里）、把 EKS 节点内存模型补进 `knowledge/technical/kubernetes-beginner-guide.md` §10.3、新增教训 #60（记忆根目录可能有第二份副本）与 #61（自检规则必须只有一个判据），并修正 `memory-distillation` 步骤 3 的 episode 自检判据；`memory-distillation` 已加入 Reference UTC/用户时区校准前置步骤和 cron schedule 核验；2026-08-16 在新机器上重生后，旧 cron 的"下午5点"文案配置债已消除——本任务 schedule 即北京时间 09:00，payload 文案已校准为真实时间
+- **下一步：** 继续蒸馏；修复/配置 isolated cron 中 `memory_search` 的 embedding provider auth，让语义检索重新可用（当前 provider=openai 但无 OPENAI_API_KEY，累计第 **31** 天 keyword-only 降级；09-18 复核确认关键词通道仍可用（本轮命中 8 条），语义通道仍未接通；需配置 openai API key 或切换到可用 embedding provider）
 - **缺口（2026-09-17 发现，经外部入口核实）:** 3 个技能只存在于 `~/.openclaw/agents/main/agent/workshop-skills/`，**不在任何 git 仓库**（该目录无 `.git`，Clawmem 里零命中）：`ai-typesetting-layer-schema`（3991 B）、`h3-prompt-writing`（6932 B + `references/base-en.txt` 15650 B + `ref-en.txt` 12588 B）、`openclaw-widget-sandbox-troubleshoot`（4465 B）。它们来自 cron `729e48dd` 的 skill 集合复核（09-16 07:12 CST 那轮真的改了内容）。违反 2026-03-27 铁律「所有 Skill 必须上 GitHub Clawmem —— 机器会变，GitHub 永远在，这是最宝贵的财富」。修法：Sakana 明确要求后，把三者纳入 `Clawmem/skills/` 并 push。**在此之前不得记为「技能都已归档」**
+- **缺口（2026-09-18 发现）: `~/workspace/clawmem/` 是同一仓库的第二份 stale clone** —— 同一 remote（`git@github.com:ewrfdn/Clawmem.git`），HEAD 停在 `2d5a226`（2026-08-08，六周前），是 live `~/Clawmem` HEAD 的**祖先**，clean、无本地提交、无分叉；里面没有 `episodes/2026-09/`，`skills/` 也是旧版。风险：任何按名字搜 `clawmem` 的动作（人、脚本、以后的我）都可能落进这份六周前的快照，把旧记忆读成当前。建议删除或 `git pull` 拉平；**本轮未动手**（无人值守轮次不做删除）。在此之前的每一次记忆检查，都要先确认路径是整个 `~/Clawmem`
 - **创建日期：** 2026-03-26
 
 ### Widget sandbox 端到端验证（Control UI widget 渲染）
-- **状态：** 09-12 定位并完成本机侧修复（根因：`mcp.apps` 未启用 → dedicated-origin 沙箱宿主没起）。配置已写入、gateway 已于 09-12 19:14 重启（pid 169548 持续运行，09-17 复核连续第 5 天未重启）、18790 在监听 ✅、nginx 18443 在监听 ✅
-- **下一步：** 需 Sakana 在 Azure NSG 放行公网 18443（本机无 az CLI）；放行后验证 Control UI 聊天内 widget 真实渲染。**在放行前不要把此项记为已完成**——当前只证明了「配置生效 + 进程监听」，未证明「公网可达 + 真实渲染」（09-17 复核 `hako.japaneast.cloudapp.azure.com:18443` 仍 `curl: (28)` / http_code `000`，连续第 5 天）
+- **状态：** 09-12 定位并完成本机侧修复（根因：`mcp.apps` 未启用 → dedicated-origin 沙箱宿主没起）。配置已写入、gateway 已于 09-12 19:14 重启（pid 169548 持续运行，09-18 复核连续第 6 天未重启）、18790 在监听 ✅、nginx 18443 在监听 ✅
+- **下一步：** 需 Sakana 在 Azure NSG 放行公网 18443（本机无 az CLI）；放行后验证 Control UI 聊天内 widget 真实渲染。**在放行前不要把此项记为已完成**——当前只证明了「配置生效 + 进程监听」，未证明「公网可达 + 真实渲染」（09-17 复核 `hako.japaneast.cloudapp.azure.com:18443` 仍 `curl: (28)` / http_code `000`，连续第 6 天）
 - **创建日期：** 2026-09-12
 
 ### AI 自动排版工具（ai-typesetting）
