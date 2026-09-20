@@ -36,7 +36,7 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
    - 在 `Clawmem/` 和 `about-bocchi/` 执行 `git status --short`。
    - 执行 `git pull --ff-only`，避免在过期分支上写入。
    - 不要覆盖未提交的人类改动；发现冲突或脏状态时先说明并停止相关写入。
-   - **核查副本/重复仓库（两步都要做，缺一步就会漏）**：① 枚举根目录下**所有**仓库 —— `find ~ -maxdepth 4 -name .git -type d`，不要用 `-name '*clawmem*'` 这类窄过滤（窄过滤本身就是一个人为选择，见教训 #62）；② 按 `remote get-url origin` 分组，同一 remote 有多份时逐份比对 `HEAD` 与 `git merge-base --is-ancestor`，确认哪些是陈旧副本。发现陈旧副本**不删除**（无人值守轮次不做删除），只记入 goal 缺口；在缺口关闭前，每次记忆检查都要先确认路径是整个 live 副本。
+   - **核查副本/重复仓库（三步都要做，缺一步就会漏）**：① 枚举根目录下**所有**仓库 —— `find ~ -maxdepth 4 -name .git -type d`，不要用 `-name '*clawmem*'` 这类窄过滤（窄过滤本身就是一个人为选择，见教训 #62）；② 按 `remote get-url origin` 分组，同一 remote 有多份时逐份比对 `HEAD` 与 `git merge-base --is-ancestor`，确认哪些是陈旧副本；③ **逐个仓库比对它自己的 remote**（`git fetch --quiet` 后看 `git rev-list --count HEAD..@{u}` / `@{u}..HEAD` / `git status --short`）——「陈旧」的判据是**与 remote 的差异**，不是有没有第二份；只做 ② 时，一个孤本但落后若干 commit、或压着未提交改动的仓库会天然通过（见教训 #63：`~/workspace/paper/` 就是这样漏掉的）。发现陈旧副本或脏工作区**不删除、不 stash、不 checkout**（无人值守轮次不动别人的改动），只记入 goal 缺口；在缺口关闭前，每次记忆检查都要先确认路径是整个 live 副本。
 
 3. **更新 Clawmem 层级**
    - `episodes/YYYY-MM/`：记录具体事件或重要空转判断。**写入前自检（唯一判据）**：episode 是**事件/对象日粒度**，不是每日粒度——判据是「每个有实质内容的日子都有 episode」，**不是**「每个执行日都有一个」。执行方式：① `ls episodes/YYYY-MM/` 看最后一项日期；② 把当前日期与最后一项之间的每个**对象日**逐个对照日记，哪天有实质产出（项目、部署、设计、重要判断）而缺 episode，就是真缺口，补收；③ 纯粹的安静维护日**不补**——补了就是拿空文件凑数。判据只能有一个：如果你发现自己在用两句「等价」的话跑同一份数据得到相反结论，说明规则还没收敛（见教训 #61）。对不上就补收，然后再写本轮——不要把这条规则只写进日记，它必须在这里每次都跑。
