@@ -122,3 +122,38 @@ background-clip: text;
 1. 写 M1：layer-schema + renderer 独立小包（浏览器+Node 双跑）
 2. 用"超大字号渐变标题"做验证用例
 3. 跑通 M1-M2 后决定是否开源
+
+## canvas 图层 vs HTML 图层：取舍的决策依据（2026-09-20 补）
+
+背景：09-20 Sakana 问「使用这样的系统，用 canvas 图层和用 html 图层取舍是什么」。参考对象是 `yejy53/Editable-Design`（arXiv 2609.04034 的官方实现，三个 Codex Skill 包），它明确选了 HTML 图层并把代价写进 `skills/editable-design/references/editor-pitfalls.md`（38 条坑表）。这份决策依据同样回答我自己的 `poster/v1` 为什么走 HTML 路线。
+
+### 两种模型在争什么
+- **Canvas / 场景图**（Figma、Photoshop 式）：图层是自定义数据结构里的节点，x/y/transform/z 是一等公民；渲染、命中、编辑全部由自己的引擎完成。
+- **HTML 图层**（Editable-Design、本项目）：设计本身就是一份 DOM 文档，「图层」= 打了 `data-layer-id` 的 DOM 子树；编辑 = 原地变异 DOM，渲染 = 浏览器。
+
+### 决策表
+| 维度 | HTML 图层 | Canvas / 场景图 |
+|---|---|---|
+| 谁在生成 | coding agent 写 CSS——训练语料里最富的媒介；排版引擎（换行/字体度量/基线）免费 | 要求模型精确吐坐标，无布局引擎兜底，生成质量骤降 |
+| 文本 | 真文字：contenteditable / IME / 可搜索 / a11y 全白送 | 文本整形、换行、IME 全部自己造 |
+| 渲染与验证 | 浏览器是免费且唯一的 ground truth，verify 拿同一渲染器比像素 | 自己写渲染器；自己渲染自己 = 循环论证，保真 bug 会藏住 |
+| 图层操作 | 要和文档模型搏斗：margin 残留、塌缩、z-index 丢失、上下文选择器失效 | transform/z 天然一等公民，拖动旋转零副作用 |
+| 下游互操作 | DOM 语义显式 → 能桥接到 PPTX 等文档格式 | 只有你自己认识你的场景图 |
+| 自由度 | 只能表达文档能表达的；像素级绘画/复杂混合做不了 | 任意绘制、混合模式、逐像素操作 |
+
+### 决定性因素：生成者是 coding agent
+整个管线的前提是「agent 写代码 → 脚本确定性验证」。CSS 是 agent **带宽最高**的视觉媒介；换成 Figma JSON 或自定义场景图，等于要求 LLM 闭眼吐精确坐标并自己实现文本换行——把最难的活从引擎搬给模型。第二因素是**验证闭环**（浏览器即生产环境本身，存在外部真值）。第三是**交付语义**（文字可选中可搜索；Editable-Design 的 `_html_to_pptx.py` 约 1669 行 Python，沿 DOM 把每个 span 映射成 PPT 文本框，能表示的就转形状、不能的烘焙成图）。
+
+### 代价写在哪里
+`editor-pitfalls.md` 那张 38 条坑表就是 HTML 图层的账单：
+- **T1–T11（固化）**：DOM 生来是文档不是图层。把文档流元素提升为可拖动图层后，margin 残留、`bottom` 定位塌陷、宽度收缩、上下文选择器 `.dark-card .label` 失效、字体没加载完量错坐标——每一条都是「文档语义 ≠ 图层语义」的翻译事故。
+- **T12–T19（交互）**：和浏览器自己的事件模型打架——pointer capture 劫持 dblclick target、中文组字期 Esc/Enter 语义、粘贴富文本污染。
+- **转换税**：html-to-pptx 那一千六百行 + representability 启发式。
+
+### 「HTML 为介质，canvas 为纪律」
+关键细节：`layout-typography.md` 规定**画布内所有图层必须绝对定位、全固定 px、坐标显式**。也就是用 `poster.json` 契约 + check-contract 校验，把 HTML 强行约束成一个**伪场景图**——享受 CSS 的生成人体工学和文本引擎，但禁止文档流、禁止隐式布局。这解释了为什么 pptx 转换器可行：它只处理这个受控子集。配合两个逃生舱：表达不了的视觉走栅格资产分层；像素级操作用独立脚本离线处理，不进 DOM。
+
+### 一句话决策规则
+**生成端是 coding agent、交付端是文档/可导出格式 → HTML 图层 + 契约约束**（Editable-Design、本项目）；**交互端是重编辑、需要自由绘制/混合/大量图层实时画布，且愿意自建文本与 IME → 场景图**。选 HTML 不是因为它更适合「图层」，而是因为 agent 的生成带宽和浏览器的免费保真在这个体系里是压倒性优势，38 条翻译成本是值得付的固定开销。
+
+**对 `poster/v1` 的直接印证**：v1 的白名单 + schema 校验 + 确定性渲染，与 Editable-Design 的 `poster.json` + `check-contract` 是同一个形状——都是「用契约把 HTML 约束成受控子集」。差别在于他们有三条逃生舱（栅格资产 / 离线像素脚本 / pptx 桥接），v1 目前只定义了纯图层树。这是 v2/M1 值得参考的部分。
