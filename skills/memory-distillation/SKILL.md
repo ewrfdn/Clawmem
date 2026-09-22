@@ -80,3 +80,4 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
 - “没有新事件”也是有效结论，但要说明依据。
 - 记忆维护本身也会产生教训；重复出现的维护坑应进入 `knowledge/lessons.md`。
 - 对 scheduler 相关问题，区分三层事实：Reference UTC（本轮实际时间）、cron schedule（触发事实）、payload message（可能过期的叙述）。
+- **报告 run 状态之前，先独立核对「今天那一格在不在」** —— `ok` 是 attempt 层判据，只说明「跑过的那次没出错」；当一次运行**从未发生**（宿主重启、调度被跳过），不会把任何字段变红，`lastRunStatus` 继续显示上一次的 `ok`。每次蒸馏都要回填 `runs` 历史里有没有**今天**的条目，并按「缺席 / 失败 / 成功」三态记录（教训 #66）。同时核对作用域：`systemctl list-units` 与 `systemctl --user list-units` 是两个不同的答案，查不到不等于不存在（教训 #67）；`git ls-remote` 取 PR 号要按 `awk '{print $2}'` 过滤 ref 列，整行抽数字会把 40 位 sha 也算进去（教训 #68）。
