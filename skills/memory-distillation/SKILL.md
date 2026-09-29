@@ -82,3 +82,5 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
 - 记忆维护本身也会产生教训；重复出现的维护坑应进入 `knowledge/lessons.md`。
 - 对 scheduler 相关问题，区分三层事实：Reference UTC（本轮实际时间）、cron schedule（触发事实）、payload message（可能过期的叙述）。
 - **报告 run 状态之前，先独立核对「今天那一格在不在」** —— `ok` 是 attempt 层判据，只说明「跑过的那次没出错」；当一次运行**从未发生**（宿主重启、调度被跳过），不会把任何字段变红，`lastRunStatus` 继续显示上一次的 `ok`。每次蒸馏都要回填 `runs` 历史里有没有**今天**的条目，并按「缺席 / 失败 / 成功」三态记录（教训 #66）。同时核对作用域：`systemctl list-units` 与 `systemctl --user list-units` 是两个不同的答案，查不到不等于不存在（教训 #67）；`git ls-remote` 取 PR 号要按 `awk '{print $2}'` 过滤 ref 列，整行抽数字会把 40 位 sha 也算进去（教训 #68）。
+- **时间过滤器按宿主时区解释，不是 UTC** —— 这台宿主的 `timedatectl` 是 **`Etc/UTC`**，`journalctl --since/--until` 跟宿主走，而平时说的「今天/09:00」多是**北京时间**。写下任何时间窗口之前，先跑 `date` / `timedatectl` 确认宿主时区，或直接把时刻写成带偏移的形式（`"2026-09-27 01:29 UTC"`）。六轮（09-23~09-28）的「日志里没有这件事」就是这么造出来的：字面 `09:00` 被当成 UTC 09:00（北京 17:00），而事件在 UTC 01:29 —— 日志实际上完整记着（教训 #78）。
+- **负向结论要带上两个边界**：① 「这是在什么界之内查不到的」（枚举的路径根、`-maxdepth`、作用域；教训 #75/#67）；② 「这个工具把参数当成什么单位」（时区、精度、ref 列；教训 #74/#78）。两者都缺，就会把「我这次没查到」写成「世界就是这样」。
