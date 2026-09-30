@@ -1,0 +1,74 @@
+# Qwen-Image-2.1 人物 LoRA — DGX Spark 专用配置
+# 基于 ai-toolkit 官方示例改编，针对 Spark 128GB 统一内存调整：
+#   - 不需要量化（24GB 显卡才需要 uint3/qfloat8 那套）
+#   - 权重源用 Comfy-Org 重打包，configs/processor 自动从 Qwen 官方仓库解析
+#
+# 用法：改 folder_path → python run.py config/train_lora_qwen_image_21_spark.yaml
+
+job: extension
+config:
+  name: "my_character_lora_v1"
+  process:
+    - type: 'sd_trainer'
+      training_folder: "output"
+      device: cuda:0
+
+      network:
+        type: "lora"
+        linear: 16          # 人物 LoRA rank 16 够用；风格类可上 32
+        linear_alpha: 16
+
+      save:
+        dtype: float16
+        save_every: 250
+        max_step_saves_to_keep: 4
+
+      datasets:
+        - folder_path: "/home/youruser/dataset"   # ← 改成你的数据集路径
+          caption_ext: "txt"
+          # 注意：cache_text_embeddings: true 时 caption_dropout_rate 静默失效（源码行为），留着无害
+          caption_dropout_rate: 0.05
+          shuffle_tokens: false
+          cache_latents_to_disk: true
+          resolution: [ 512, 768, 1024 ]   # 多分辨率分桶，Qwen 系效果好
+
+      train:
+        batch_size: 1
+        steps: 2000          # 30 张图约 66 个 epoch；1000-1500 步时先看采样图
+        gradient_accumulation: 1
+        train_unet: true
+        train_text_encoder: false   # Qwen3-VL-8B 文本编码器不训
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        optimizer: "adamw8bit"
+        lr: 1e-4
+        cache_text_embeddings: true   # 8B 编码器只跑一遍，省大量计算
+        dtype: bf16
+
+      model:
+        name_or_path: "Comfy-Org/Qwen-Image-2.1"   # 权重源（重打包）
+        arch: "qwen_image_2"
+        # Spark 128GB 统一内存：关闭量化，全精度训
+        quantize: false
+        low_vram: false
+
+      sample:
+        sampler: "flowmatch"
+        sample_every: 250
+        sample_start_step: 0
+        width: 1024
+        height: 1024
+        prompts:
+          # 换成你自己的触发词（和 caption 里保持一致）
+          - "p3r5on 在咖啡店靠窗的位置看书，午后暖色阳光"
+          - "p3r5on 穿黑色大衣走在夜晚的街道上，霓虹灯反射"
+          - "p3r5on 的面部特写，微笑，摄影棚柔光，白色背景"
+        neg: ""
+        seed: 42
+        walk_seed: true
+        guidance_scale: 3
+        sample_steps: 25
+
+meta:
+  name: "[name]"
+  version: '1.0'
