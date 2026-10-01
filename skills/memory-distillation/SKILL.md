@@ -28,6 +28,7 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
    - 先核对任务提供的 Reference UTC、用户时区（Sakana 默认 Asia/Shanghai）和提示文案中的本地时间；如果不一致，明确记录，不要盲信“今天/昨天”。
    - 如果触发消息带 cron job id，优先 inspect job 的 `schedule.expr` 与 `tz`：真实触发时间以 schedule 为准，payload 文案可能过期。不要在未核对 schedule 前断言 cron 跑错。
    - 按校准后的日期窗口读取今天和昨天的 workspace 日记；如果今天不存在，记录为“本轮开始时不存在”。
+   - **产物层核对（判断“上一格到底写没写成”的唯一判据）**：`runs` 只记录 attempt 跑没跑、失败时只给一个**分类**（`errorReason`），它说不出根因，也无从区分“写得不好”与“没写”。每轮先做三项产物核对：① `ls episodes/YYYY-MM/` —— 上一个对象日有没有 episode；② 上一个执行日的 workspace `memory/YYYY-MM-DD.md` 在不在；③ 两仓 `git log --oneline -1` 顶端日期对不对得上。三项里任何一项缺位，就是**真缺口**，本轮要补收；读到 `errorReason: timeout` 之类时，去带偏移的 journal 时刻里找 `rawError=`（教训 #79）。
    - **不要只读日记**：再用 `sessions_list` 扫同一窗口内非 cron 的会话（`kind` 为 `main`/`other`、parent 为 main），按 `updatedAt` 比对窗口。日记没写的人类交互、其他 session 的真实产出都算本轮输入；判“安静维护日”之前必须先跑这一步。
    - 如涉及 prior work / decisions / dates / people / todos，先尝试 `memory_search`。
    - 如果 `memory_search` 不可用，记录原因，并改用日记文件与仓库直接检查。
