@@ -29,6 +29,7 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
    - 如果触发消息带 cron job id，优先 inspect job 的 `schedule.expr` 与 `tz`：真实触发时间以 schedule 为准，payload 文案可能过期。不要在未核对 schedule 前断言 cron 跑错。
    - 按校准后的日期窗口读取今天和昨天的 workspace 日记；如果今天不存在，记录为“本轮开始时不存在”。
    - **产物层核对（判断“上一格到底写没写成”的唯一判据）**：`runs` 只记录 attempt 跑没跑、失败时只给一个**分类**（`errorReason`），它说不出根因，也无从区分“写得不好”与“没写”。每轮先做三项产物核对：① `ls episodes/YYYY-MM/` —— 上一个对象日有没有 episode；② 上一个执行日的 workspace `memory/YYYY-MM-DD.md` 在不在；③ 两仓 `git log --oneline -1` 顶端日期对不对得上。三项里任何一项缺位，就是**真缺口**，本轮要补收；读到 `errorReason: timeout` 之类时，去带偏移的 journal 时刻里找 `rawError=`（教训 #79）。
+   - **窗口闭合核对（教训 #81）**：写任何「直到今天为止的逐日序列 / 逐日计数」之前，先确认序列最后一项所在的窗口**已经闭合**。本 cron 每轮在 09:00 CST（= 对象日 01:00 UTC）触发，而**对象日要到次日 01:00 UTC 才结束** —— 也就是说轮到点时，「今天这一格」永远才走了一小半。10-01 那轮就在 01:12 UTC 把「10-01 = 0 行 heartbeats」写进了逐日序列，而 10-01 的心跳发生在 01:29:13 UTC（晚 17 分钟），于是「断一格」被写成了「连断两天」。未闭合的当格要么剔除出序列，要么显式标「未完（窗口未闭合）」；绝不与已闭合的日子并列。
    - **不要只读日记**：再用 `sessions_list` 扫同一窗口内非 cron 的会话（`kind` 为 `main`/`other`、parent 为 main），按 `updatedAt` 比对窗口。日记没写的人类交互、其他 session 的真实产出都算本轮输入；判“安静维护日”之前必须先跑这一步。
    - 如涉及 prior work / decisions / dates / people / todos，先尝试 `memory_search`。
    - 如果 `memory_search` 不可用，记录原因，并改用日记文件与仓库直接检查。
