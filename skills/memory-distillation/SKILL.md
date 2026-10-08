@@ -66,6 +66,7 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
    - commit message 使用简短中文，说明蒸馏日期或技能主题。
    - 执行 `git push`；即使无 commit，也可 push 验证远端同步。
    - **任何描述自己副作用的句子，落笔前先读回来**（教训 #77）：commit hash 用 `git log --oneline -1` 读回来、push 用 `git status --short` 与 `git rev-list --count` 确认、写文件用 `ls`/`wc -c` 确认。**禁止凭计划或记忆写**「已 commit / 已 push / 已写入」——一次 run 在走到这一步之前，它的「修改」小节里没有任何字段是可信的。
+   - **mtime 判不了「哪一版是终态」**（教训 #87）：文件 mtime 只到**秒**，同一秒内可以容纳多次写入，「第一版」与「最后一版」的 mtime 因此**同形**。用 mtime 判定「有没有第二次写入 / 哪个是终稿」之前，先确认这个精度能分辨你关心的两次事件；分辨不了就改用**内容判据**（`grep` 后加的那段、直接读会话里的每次 write 调用），或把结论降级成「双义 / 未定向」。
 
 7. **记录日记**
    - 在 `workspace/memory/YYYY-MM-DD.md` 写入本轮输入、修改、commit hash、未处理项。
