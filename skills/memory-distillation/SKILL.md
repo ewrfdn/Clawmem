@@ -48,7 +48,7 @@ description: "Daily Bocchi memory distillation workflow: read workspace diaries,
    - `identity/beliefs.md`：只有从多次经验中长出的稳定判断，才作为候选信念。
    - `relationships/*.md`：只更新与人的互动模式，不泄露不该公开的私密内容。
    - `goals/active.md` / `goals/completed.md`：同步目标状态，不虚构完成项。
-   - **核查“某类东西齐了吗”时，先把入口列表本身列为待验证对象**：技能不只在 `Clawmem/skills/`（agent 的 `workshop-skills/` 可能不在任何 git 仓库），进展不只在上一轮文本里（要在上游仓库回填）。入口漏了，结论就会跟着漏。
+   - **在本宿主上核对一份证据之前，先确认产生那个证据的机器是哪一台**（教训 #88 / #85）：本机的文件形状（行数、计数、mtime）只能支持**本机**的结论；一旦事实来自另一次机器/时间线（08-16 重生、远端 ComfyUI、MCP 的 target），就不能拿本机读数去验它。指不出「这个信号是谁发出的」，就只能写工具返回了什么。：技能不只在 `Clawmem/skills/`（agent 的 `workshop-skills/` 可能不在任何 git 仓库），进展不只在上一轮文本里（要在上游仓库回填）。入口漏了，结论就会跟着漏。
 
 4. **更新 about-bocchi**
    - 只有有里程碑或值得长期记住的感悟时，追加自传片段。
